@@ -7,9 +7,10 @@ date: "2024-06-06"
 ## Load data and necessary libraries
 ## Dataset can be constructed from the heart_pipeline_final.Rmd file
 ```{r setup, include=FALSE}
+rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 # Molly:
-load("C:/Users/mhwhi/Downloads/heart_post_policy (8).RData")
+load("C:/Users/mhwhi/Downloads/heart_post_policy (13).RData")
 df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat')
 
 # Grace:
@@ -48,6 +49,16 @@ df = df %>%
   ) %>%
   ungroup()
 
+df = df %>% group_by(PX_ID) %>%
+  mutate(
+  durable_LVAD = case_when(
+    durable_LVAD == 1 ~ 1,
+    durable_lvad_implant_dt <= unique_date ~ 1,
+    is.na(durable_lvad_implant_dt) & any(durable_LVAD == 1) ~ 1,
+    TRUE ~ 0
+  )
+) %>% ungroup()
+
 ```
 
 ## Censor candidates past December 31st, 2023
@@ -67,11 +78,14 @@ dim(table(df$PX_ID)) # 24516
 table(df$transplant) # 16963
 table(df$outcome) # 4045 - includes posttx
 df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1926 pretx deaths
+
+
 ```
 
 ## Identify candidates who were delisted
 ## Determine time to death / censor for these candidates
 ```{r}
+
  # only one person with rows/death after removal
 df %>% filter(cumsum(cumsum(grepl("CAN_REM_DT", unique_event)))>1) %>% select(PX_ID,unique_event,outcome)
 
@@ -79,6 +93,12 @@ df %>% filter(cumsum(cumsum(grepl("CAN_REM_DT", unique_event)))>1) %>% select(PX
 df = df %>% mutate(
   delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event), 1, 0)
 )
+
+
+df = df %>% group_by(PX_ID) %>% mutate(
+  delisting_dt = if_else(delisting == 1, unique_date, NA)
+) %>% fill(delisting_dt, .direction = "downup") %>% ungroup()
+
 
 # similar to row from transplant to death/censoring, make one row from delisting to death
 df = df %>% group_by(PX_ID) %>%
@@ -100,6 +120,8 @@ df %>% filter(outcome==1,!is.na(time_until_censor_after_delisting)) %>% nrow()
 
 # count transplant, death, delisting
 df %>% ungroup() %>% count(transplant,delisting,outcome)
+
+df %>% select(death_time, t_stop, outcome) %>% filter(any(death_time == t_stop)) 
 
 ```
 
@@ -556,6 +578,33 @@ df_final <- df_final %>%
 df_final  %>% select(PX_ID, status, interval_start, interval_stop, wait_1, wait_2, wait_3, wait_4, wait_5, wait_6)
 ```
 
+```{r}
+df_final %>% select(PX_ID, current_date, durable_LVAD, durable_lvad_implant_dt, status, status_criteria) %>% filter(!is.na(durable_lvad_implant_dt) & durable_LVAD == 1 & current_date > "2018-10-18" & current_date < durable_lvad_implant_dt) %>% arrange(PX_ID)
+
+df_final %>% filter(PX_ID == 654863 & durable_LVAD == 1)
+
+table(df_final$status_criteria)
+df_final %>% filter(status_criteria == "CriteriaLvadSupport")
+df_final %>% mutate(durable_lvad_implant_dt = as.Date(durable_lvad_implant_dt)) %>% filter(status_criteria == "CriteriaLvadSupport" & !(status %in% c(4,6, "inactive"))) %>% select(PX_ID, status, durable_LVAD, current_date,  durable_lvad_implant_dt)
+
+df_final %>% filter(durable_LVAD == 1 & is.na(durable_lvad_implant_dt)) %>% select(PX_ID, status, status_criteria, current_date, durable_lvad_implant_dt, durable_LVAD)
+
+```
+
+```{r}
+df_final = df_final %>% mutate(
+  durable_lvad_implant_dt = as.Date(durable_lvad_implant_dt))
+
+df_final = df_final %>% mutate(
+  durable_lvad_time = case_when(
+    is.na(durable_lvad_implant_dt) & durable_LVAD == 1 ~ as.numeric(current_date - as.Date(can_listing_dt)),
+    durable_lvad_implant_dt <= current_date ~ as.numeric(current_date - durable_lvad_implant_dt),
+    TRUE ~ 0
+  )
+)
+df_final  %>% filter(durable_LVAD == 1) %>% select(durable_lvad_implant_dt, current_date, can_listing_dt, durable_lvad_time)
+
+```
 
 
 # Save discrete time data
@@ -567,7 +616,60 @@ df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% d
 table(df_final$interval_start < df_final$interval_stop)
 save("df_final", file =  "discrete_final_data.RData")
 ```
+```{r}
 
+df_final = df_final %>%
+  group_by(PX_ID) %>% # Group by PX_ID
+  mutate(
+    first_lvad_date = min(current_date[status_criteria == "CriteriaLvadSupport"], na.rm = TRUE) # Find the first date
+  ) %>%
+  ungroup() 
+
+filtered = df_final %>%
+  group_by(PX_ID) %>%
+  filter(any(status_criteria == "CriteriaLvadSupport")) %>% mutate(
+  lvad_time_test = first_lvad_date - max(as.Date(can_listing_dt), durable_lvad_implant_dt, na.rm = T) 
+)
+
+ggplot(filtered, aes(x = lvad_time_test)) +
+  geom_histogram(binwidth = 5, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of LVAD Time Test",
+       x = "LVAD Time Test",
+       y = "Frequency") +
+  theme_minimal()
+
+filtered = as.data.frame(filtered)
+base::summary(filtered$lvad_time_test)
+?summary
+variable = filtered$lvad_time_test
+filtered = filtered %>% select(PX_ID, lvad_time_test) %>%
+  distinct()
+summary(as.numeric(variable))
+as.numericvariable
+max(df_final$lvad_time_test, na.rm = T)
+
+filtered %>% filter(!is.na(lvad_time_test)) %>% select(PX_ID, current_date, can_listing_dt ,durable_lvad_implant_dt, lvad_time_test)
+
+df_final %>%
+  group_by(PX_ID) %>%
+  filter(any(status_criteria) == "CriteriaLvadSupport")
+
+df_final %>% filter(status_criteria == "CriteriaLvadSupport")
+
+df_final %>% filter(PX_ID == 542942 & status_criteria == "CriteriaLvadSupport")
+
+filtered %>% select(lvad_time_test)
+filtered %>% filter(as.numeric(lvad_time_test) == 77)
+
+df_final %>% filter(PX_ID == 654863) %>% select(PX_ID, status, current_date, durable_LVAD, can_listing_dt, durable_lvad_implant_dt, first_lvad_date, status_criteria)
+
+df_final %>% filter(as.numeric(lvad_time_test) > 0 & current_date > "2019-01-01")
+```
+
+```{r}
+df %>% filter(is.na(durable_lvad_implant_dt) & durable_LVAD == 1) %>% count(PX_ID)
+df %>% filter(PX_ID == 1107906) %>% select(durable_LVAD, durable_lvad_implant_dt, status)
+```
 
 
 
