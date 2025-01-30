@@ -29,7 +29,6 @@ library(stringr)
 here::i_am("heart_data_pipeline.Rmd")
 
 RData_file_loaded = FALSE
-
 ```
 
 # Import data sets from SRTR
@@ -125,9 +124,10 @@ if (RData_file_loaded == FALSE) {
   # load(here::here(raw_data_filename))
 }
 
-
-
 ```
+
+
+
 
 # Link data sets using JustId, WlregAuditId, and PX_ID
 
@@ -176,7 +176,7 @@ just_form_hr_data_link = just_form_hr_data_link %>%
 just_form_hr = just_form_hr %>% 
   select(JustId, RequestedCandStatCd, RequestedCandStat_descrip,
          ExtensionNumber, Exception, ThorSupportDevicePrimary,
-         ThorSupportDeviceSecondary, descrip, AdmittedToHospital) %>%
+         ThorSupportDeviceSecondary, descrip, AdmittedToHospital, FormEffectiveDt) %>%
   mutate(listing_description = descrip) %>% 
   select(-descrip) %>% 
   right_join(just_form_hr_data_link %>% 
@@ -187,16 +187,16 @@ just_form_hr = just_form_hr %>%
   # full_join(status_just_episode %>% select(JustId:EndDate), by = "JustId")
 
 # thor_support_device seems to include many duplicates, include at your own risk
-# thor_support_device = thor_support_device %>%
-# 
-#   select(DeviceId, VadBrandId, TahBrandId, PercuBrandId, ImplantDt) %>%
-# 
-#   # join device information by DeviceId
-#   left_join(just_form_hr %>% select(ThorSupportDevicePrimary, PX_ID),
-#             by = c("DeviceId" = "ThorSupportDevicePrimary")) %>%
-#   select(-DeviceId) %>%
-#   distinct(.keep_all = TRUE)
-#   
+thor_support_device = thor_support_device %>%
+
+
+  # join device information by DeviceId
+  left_join(just_form_hr %>% select(ThorSupportDevicePrimary, PX_ID),
+            by = c("DeviceId" = "ThorSupportDevicePrimary")) %>%
+  select(-DeviceId) %>%
+  distinct(.keep_all = TRUE)
+
+thor_support_device
 #   
 #   # can pipe in this code to include secondary VAD info from thor_support_device
 #   # left_join(just_form_hr %>% select(ThorSupportDeviceSecondary, PX_ID),
@@ -227,7 +227,37 @@ just_form_hr_stat4 = just_form_hr_stat4 %>%
               select(JustId, PX_ID, ChangeDt), by = "JustId")
 
 
-just_form_hr_stat3 %>% filter(PX_ID == 1251088)
+
+thor_support_device = thor_support_device %>% mutate(
+  ChangeDt = as.Date(ChangeDate)
+)
+
+lvad_keywords = c("heartmate", "hm", "lionheart", "arrow", "jarvik", "micromed", "debakey", "novacor", "evaheart", "worldheart", "levacor", "reliantheart")
+
+#Durable lvads defined as:
+# devices with the appropriate code
+# devices with "unknown" code but qualifying status 4 by LVAD on that date
+# "unknown" device codes with the name of a durable LVAD in their description
+
+lvads = thor_support_device %>% left_join(just_form_hr_stat4, by = c("PX_ID", "ChangeDt")) %>% filter(VadBrandId %in% c('202', '205', '206', '207', '208', '209', '210', 
+                        '212', '213', '214', '223', '224', '233', '236', 
+                        '239', '240', '312', '313', '314', '315', '316', '319', '322', 
+                        '327', '330', '333', '334') | (VadBrandId == 999 & CriteriaLvadSupport == 1) | (VadBrandId == 999 & grepl(paste(lvad_keywords, collapse = "|"), OtherSpecify, ignore.case = TRUE)))
+
+lvads = lvads %>% group_by(PX_ID) %>% mutate(
+  durable_lvad_implant_dt = first(ImplantDt)
+) %>% select(PX_ID, durable_lvad_implant_dt) %>% distinct()
+
+# just_form_hr_stat4 %>% filter(PX_ID == 1131758)
+# lvads %>% filter(PX_ID == 1131758)
+# 
+# df %>% filter(PX_ID == 1131758) %>% select(unique_date, status, status_criteria, CriteriaLvadSupport)
+
+px_ids = (just_form_hr %>% filter(ChangeDt < "2018-10-18"))$PX_ID
+px_ids_1a = (stat_just_hr1a %>% filter(PX_ID %in% px_ids))$PX_ID
+
+just_form_hr_stat4 %>% filter(PX_ID == 729036)
+cand_thor %>% filter(PX_ID == 1292886)
 ```
 
 # Tidy input datasets
@@ -246,15 +276,16 @@ include_multi_organ_recipients = TRUE
 include_pre_policy = FALSE
 missingness_threshold = 1
 
+
 # filter candidates based on inclusion/exclusion criteria 
 cand_list = cand_thor %>% 
   
-  # Remove recipients who were removed prior to policy change
-  filter(CAN_LAST_ACT_STAT_DT >= filter_date_start | CAN_LAST_INACT_STAT_DT >= filter_date_start) %>%
+  # Remove recipients listed prior to policy change
+  filter(CAN_LAST_ACT_STAT_DT  >= filter_date_start |     CAN_LAST_INACT_STAT_DT  >= filter_date_start) %>%
   filter(CAN_LISTING_DT <= filter_date_end) %>%
   
   # Remove heart-lung and lung-only recipients
-  filter(WL_ORG != "HL") %>%   
+  #filter(WL_ORG != "HL") %>%   
   filter(WL_ORG != "LU") %>% 
 
   # Remove recipients who were < 18 yrs old at listing
@@ -315,7 +346,10 @@ rm(cand_thor, tx_hr, risk_strat_data_hr, stathist_thor, just_form_hr,
 
 gc()
 
-cand_list %>% select(PX_ID, CAN_LISTING_DT, CAN_REM_DT, REC_TX_DT, CAN_DEATH_DT)
+stathist %>% filter(PX_ID == 729036)
+just_form %>% filter(PX_ID == 729036)
+
+cand_list %>% filter(PX_ID == 1343464)
 ```
 
 # Pivot cand_list and stathist by date, then full_join to create full_list
@@ -413,7 +447,7 @@ full_list = cand_list %>%
   arrange(PX_ID, unique_date) %>% 
   ungroup()
   
-full_list %>% filter(PX_ID == 1250934)
+full_list %>% filter(PX_ID == 729036)
 
 stathist
 ```
@@ -485,7 +519,7 @@ full_list = full_list %>%
   arrange(PX_ID, unique_date) %>% 
   ungroup()
 
-
+full_list %>% filter(PX_ID == 1215709)
 
 ```
 
@@ -706,6 +740,9 @@ risk_strat = risk_strat %>%
 risk_strat %>% filter(PX_ID == 1387071) %>% select(starts_with("Criteria"))
 
 gc()
+
+risk_strat %>% select(ends_with("Dt"))
+
 ```
 
 
@@ -783,7 +820,7 @@ risk_strat = risk_strat %>%
          # indicator variables from just_stat1-just_stat4
          any_of(just_form_indicator_variables))
 
-
+risk_strat %>% filter(PX_ID == 729036)
          
 risk_strat = risk_strat %>%
   
@@ -904,6 +941,15 @@ full_list = full_list %>%
 
 
 ```
+```{r}
+risk_strat = risk_strat %>% mutate(
+  across(starts_with("Criteria"), ~ as.numeric(.))) %>%
+mutate(
+  across(starts_with("Criteria"), ~ 
+    ifelse(unique_event == "ChangeDt" & !is.na(.) & . == 1, 1, 0))) 
+
+
+```
 
 
 # Pivot old policy justification forms by date, then join with full_list
@@ -939,6 +985,16 @@ vars_to_remove = c("CANHX_HEMO_SBP", "CANHX_HEMO_PCWP", "CANHX_HEMO_MAP", "CANHX
          "HemoCardiacOutput", "CANHX_HEMO_REST_HR_RATE", "HemoRestingHeartRate",
          "CANHX_HEMO_DBP", "HemoDbp", "CANHX_HEMO_PASP", "HemoPasp",
          "CANHX_HEMO_PADP", "HemoPadp", "CANHX_HEMO_MPAP", "HemoMeanPressure")
+
+```
+
+```{r}
+full_list %>% filter(PX_ID == 1215709)
+```
+
+
+```{r}
+
 
 full_list = full_list %>% 
   
@@ -1010,7 +1066,6 @@ full_list = full_list %>%
   # arranges dataset for easy viewing
   arrange(PX_ID, unique_date) %>%
   ungroup()
-
 
 ```
 
@@ -1144,8 +1199,8 @@ df = full_list %>%
       grepl("CANHX_PHYS_HEMO_DT", unique_event) |
       grepl("CANHX_PHYS_ECHO_DT", unique_event) |
       grepl("CANHX_MED_UPDATE_DT", unique_event))
+df %>% filter(PX_ID == 1215709)
   
-
 ```
 
 # Start dataset at listing
@@ -1260,9 +1315,8 @@ df %>% group_by(PX_ID) %>% filter(n_distinct(transplant_time)!=1)
 df %>% group_by(PX_ID) %>% filter(n_distinct(death_time)!=1)
 df %>% group_by(PX_ID) %>% filter(n_distinct(removal_time)!=1)
   
-
-# remove patients who died before 1/1/2019
-df = df %>% filter(death_date_max >= filter_start_date)
+df = df %>% filter(is.na(death_date_max) | death_date_max >= filter_date_start)
+df %>% filter(PX_ID == 1215709)
 ```
 
 ```{r}
@@ -1443,6 +1497,11 @@ df %>% filter(t_stop == 0)
 df %>% select(PX_ID, CAN_VAD1, CAN_VAD2, CAN_VAD_TY)
 ```
 
+```{r}
+df = df %>% left_join(lvads, by = "PX_ID")
+
+```
+
 # Adjust status, diagnosis, and device variables
 ```{r, warning=F, comment=NA, message=F}
 ## Age in years
@@ -1526,7 +1585,7 @@ durable_lvad_types = c('202', '205', '206', '207', '208', '209', '210',
 
 df = df %>% mutate(
   durable_LVAD = case_when(
-    CriteriaLvadSupport.stat3 == 1 | CriteriaLvadDiscSupport == 1 |
+    durable_lvad_implant_dt >= unique_date |
     ((CAN_VAD_TY == 2 & status_for_lvad != '5' & status_for_lvad != '6') & 
     ((CAN_VAD1 %in% durable_lvad_types) |
     (CAN_VAD2 %in% durable_lvad_types))) ~ 1,
@@ -1567,6 +1626,16 @@ df = df %>% mutate(
 
 df %>% select(PX_ID, CANHX_STAT_CD, RequestedCandStatCd, status)
 
+```
+```{r}
+df %>% filter(durable_lvad_implant_dt > unique_date & CriteriaLvadSupport == 1) %>% select(durable_lvad_implant_dt, unique_date, CriteriaLvadSupport, status)
+```
+```{r}
+full_list %>% filter(PX_ID == 729036) %>% select(JustId, unique_date, unique_event, CriteriaLvadSupport)
+
+just_stat4 %>% filter(PX_ID == 729036)
+stathist %>% filter(PX_ID == 729036)
+risk_strat %>% filter(PX_ID == 729036)
 ```
 
 
@@ -1615,16 +1684,25 @@ cand_list %>% filter(PX_ID == 1271711) %>% select(CAN_VAD1)
 ```
 
 
+
+
 # Select variables for final dataframe
 ```{r}
 save(df, file="heart_post_policy_full.Rdata")
-df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, JustId, RequestedCandStatCd, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, death_date_max, status_initial)
+df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, JustId, RequestedCandStatCd, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial, durable_lvad_implant_dt)
 
 
 save(df, file = "heart_post_policy.RData")
 View(df)
 
+load("heart_post_policy_full.RData")
+
+
+
 ```
+
+
+
 
 ```{r}
 df %>% group_by(PX_ID) %>% filter(PX_ID == 1251084) %>% select(PX_ID, unique_date, durable_LVAD, status)
@@ -1646,4 +1724,3 @@ load("cand_thor.RData")
 cand_thor %>% filter(PX_ID == 1251156) %>% select()
 cand_thor$CAN_VAD_TAH
 ```
-
