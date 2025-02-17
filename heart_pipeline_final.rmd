@@ -281,7 +281,7 @@ missingness_threshold = 1
 cand_list = cand_thor %>% 
   
   # Remove recipients listed prior to policy change
-  filter(CAN_REM_DT  >= filter_date_start) %>%
+  filter(is.na(CAN_REM_DT) | CAN_REM_DT  >= filter_date_start) %>%
   filter(CAN_LISTING_DT <= filter_date_end) %>%
   
   # Remove heart-lung and lung-only recipients
