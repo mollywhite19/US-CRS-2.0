@@ -300,6 +300,13 @@ df_final %>% group_by(PX_ID,train_test_split) %>%
   mutate(rown=n()) %>%
   ungroup %>%
   with(.,tapply(rown,train_test_split,summary))
+# $test
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#    1.00   25.00   47.00   38.08   52.00   59.00 
+# 
+# $train
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#     1.0    48.0    95.0   102.3   155.0   209.0 
 ```
 
 # Missing data and out-of-range values
@@ -357,6 +364,8 @@ df_final = df_final %>% mutate(
 
 ## Data summary before imputation
 ```{r}
+df_final_preImpute = df_final
+
 table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + factor(out_of_range_flag) + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final) # very low percent missing except w/ BNP
 summary(df_final$BNP[df_final$BNP_NT_Pro %in% 0]) # should be between 0 and 20000
 summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 40000
@@ -367,6 +376,8 @@ summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 4000
 # impute missing candidate values based on median in our cohort
 cand_thor_impute = df_cand_thor %>%
   filter(PX_ID %in% df_final$PX_ID) %>%
+  # summarise(med_hgt=median(CAN_HGT_CM,na.rm=T),
+  #           med_wgt=median(CAN_WGT_KG,na.rm=T))
   mutate(CAN_HGT_CM = ifelse(is.na(CAN_HGT_CM),median(CAN_HGT_CM,na.rm=T),CAN_HGT_CM),
          CAN_WGT_KG = ifelse(is.na(CAN_WGT_KG),median(CAN_WGT_KG,na.rm=T),CAN_WGT_KG),
          bsa = 0.007184 * (CAN_HGT_CM ^ 0.725) * (CAN_WGT_KG ^ 0.425))
@@ -378,6 +389,9 @@ df_final <- left_join(df_final, cand_thor_impute, by='PX_ID')
 ### Fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
 ```{r}
 # fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
+with(df_final, median(BNP[BNP_NT_Pro == '0'],na.rm=T))
+with(df_final, median(BNP[BNP_NT_Pro == '1'],na.rm=T))
+df_final %>% select(sodium,albumin,bilirubin,creatinine) %>% apply(.,2,median,na.rm=T)
 df_final <- df_final %>%
   mutate(
     arterial_lactate = ifelse(is.na(arterial_lactate), 1, arterial_lactate),
@@ -480,6 +494,64 @@ df_final <- df_final %>%
             papi < 1 & !is.na(papi) ~ 1,
             TRUE ~ papi
     ))
+```
+
+## Table 1, with missing data
+```{r}
+## before imputation
+table_data = df_final_preImpute
+label(table_data$albumin) = "Albumin"
+label(table_data$bilirubin) = "Bilirubin"
+label(table_data$creatinine) = "Creatinine"
+label(table_data$sodium) = "Sodium"
+label(table_data$BNP) = "BNP"
+label(table_data$cardiac_output) = "Cardiac output"
+label(table_data$diastolicBP) = "Diastolic BP"
+label(table_data$systolicBP) = "Systolic BP"
+label(table_data$PCWP) = "PCWP"
+label(table_data$PASP) = "PASP"
+label(table_data$PADP) = "PADP"
+label(table_data$central_venous_pressure) = "Central venous pressure"
+table_data$out_of_range_flag = factor(table_data$out_of_range_flag)
+label(table_data$out_of_range_flag) = "Any data out of range"
+table_data$durable_LVAD = factor(table_data$durable_LVAD)
+label(table_data$durable_LVAD) = "Durable LVAD"
+table_data$ECMO_ever = factor(table_data$ECMO_ever)
+label(table_data$ECMO_ever) = "Ever on ECMO"
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + ECMO_ever + out_of_range_flag | train_test_split, data=table_data) # very low percent missing except w/ BNP
+
+# summary of number of rows per candidate
+df_final_preImpute %>% group_by(PX_ID,train_test_split) %>%
+    mutate(rown=n()) %>%
+    ungroup %>%
+    # with(.,tapply(rown,train_test_split,summary))
+    with(.,tapply(rown,train_test_split,sd))
+df_final_preImpute %>% group_by(PX_ID) %>%
+    mutate(rown=n()) %>%
+    ungroup %>%
+    pull(rown) %>% summary # sd
+
+## after imputation - supplement
+table_data = df_final
+label(table_data$albumin) = "Albumin"
+label(table_data$bilirubin) = "Bilirubin"
+label(table_data$creatinine) = "Creatinine"
+label(table_data$sodium) = "Sodium"
+label(table_data$BNP) = "BNP"
+label(table_data$cardiac_output) = "Cardiac output"
+label(table_data$diastolicBP) = "Diastolic BP"
+label(table_data$systolicBP) = "Systolic BP"
+label(table_data$PCWP) = "PCWP"
+label(table_data$PASP) = "PASP"
+label(table_data$PADP) = "PADP"
+label(table_data$central_venous_pressure) = "Central venous pressure"
+table_data$out_of_range_flag = factor(table_data$out_of_range_flag)
+label(table_data$out_of_range_flag) = "Any data out of range"
+table_data$durable_LVAD = factor(table_data$durable_LVAD)
+label(table_data$durable_LVAD) = "Durable LVAD"
+table_data$ECMO_ever = factor(table_data$ECMO_ever)
+label(table_data$ECMO_ever) = "Ever on ECMO"
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + ECMO_ever + out_of_range_flag | train_test_split, data=table_data) # very low percent missing except w/ BNP
 ```
 
 ## Calculate wait times
