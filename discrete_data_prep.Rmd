@@ -520,6 +520,16 @@ table_data$ECMO_ever = factor(table_data$ECMO_ever)
 label(table_data$ECMO_ever) = "Ever on ECMO"
 table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + ECMO_ever + out_of_range_flag | train_test_split, data=table_data) # very low percent missing except w/ BNP
 
+# summary of number of candidates
+dim(table(df_final_preImpute$PX_ID)) # 24852
+df_final_preImpute %>% distinct(PX_ID,train_test_split) %>%
+  count(train_test_split) %>%
+  mutate(prop=n/dim(table(df_final_preImpute$PX_ID)))
+#   train_test_split     n  prop
+#   <fct>            <int> <dbl>
+# 1 test              7568 0.305
+# 2 train            19747 0.795
+
 # summary of number of rows per candidate
 df_final_preImpute %>% group_by(PX_ID,train_test_split) %>%
     mutate(rown=n()) %>%
