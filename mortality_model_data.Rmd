@@ -8,13 +8,17 @@ date: "2024-06-24"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 rm(list=ls())
-load("discrete_final_data.RData")
-load("C:/Users/mhwhi/Downloads/df_intervals_setup.RData")
+load("discrete_final_data.RData") # df_final - created in discrete_data_prep.Rmd
+load("df_intervals_setup.RData") # df_intervals - US-CRS 1.0
 library(dplyr)
 library(splines)
 library(tidyr)
 library(ggplot2)
 library(rms)
+library(survey) # for svydesign and svyCreateTableOne
+library(tableone) # for CreateTableOne
+
+# WORKING - fix extra rows w/ outcome=1
 
 # recode outcome as 0 if patient received transplant
 ## want outcome to be an indicator of pretx death
@@ -23,24 +27,179 @@ df_final = df_final %>%
   mutate(any_tx=any(transplant==1)) %>%
   ungroup() %>%
   mutate(outcome = ifelse(any_tx,0,outcome))
-df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1926 - yay!
 
 # date for end of interval
-df_final = df_final %>% mutate(
-  current_date_end = current_date + pmin(last_active_date - current_date, 7)
-)
+# df_final = df_final %>% mutate(
+#   current_date_end = current_date + pmin(last_active_date - current_date, 7)
+# )
 
+# time on LVAD at current_date
 df_final = df_final %>% mutate(
   lvad_years = durable_lvad_time/365.25
 )
 ```
 
-# Split data into training / testing sets
+## Summary of listing dates, current dates
+The `df_final` dataset contains listings through 11/15/2023 and updates through 12/30/2023. The cutoff listing date was chosen to ensure all candidates had at least 6 weeks of follow-up.
 ```{r}
+summary(df_final$can_listing_dt)
+summary(df_final$current_date)
+```
+
+# Fit transplant models for IPW
+The denominator of the inverse probability weights is a function of the time-varying probability of transplant. We estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the entire discrete-time dataset from listing to removal and allowing patient characteristics to update at the beginning of each week. (Note: The training/test split is designed to hold out mortality information in particular, which was not used in this step.)
+
+We considered four specifications of the model for the denominator of the weights:
+
+   - US-CRS 1.0 variables
+   - US-CRS 1.0 variables + status
+   - US-CRS 1.0 variables + status + hemodynamics
+   - US-CRS 1.0 variables + status + hemodynamics + time since listing
+   
+The denominator weights should adjust for all time-varying confounders of transplant and mortality, and balance the distribution of confounders at each timepoint. Status was considered a potential confounder because it is a strong predictor of transplant under the current heart allocation system and may provide additional information about mortality.
+
+We then assessed covariate balance after weighting each week of the discrete-time dataset by the inverse probability of receiving the observed treatment (transplant or no transplant) that week. The weighted distributions of all variables (US-CRS 1.0 variables + status + hemodynamics + time since listing) were compared between the groups "transplant" and "no transplant", where patients could contribute to both groups, joining the "transplant" group on their week of receiving transplant.
+
+WINNER?
+
+## Compare denominator models
+```{r}
+## fit candidate models for denominator of IPW ##
+
+## Model with only variables from US-CRS 1.0
+tx_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro +
+    durable_LVAD + short_MCS_ever), data = df_final, family = binomial)
+tx_model
+summary(tx_model)
+
+## Model with US-CRS 1.0 vars and status
+tx_status_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status), data = df_final, family = binomial)
+tx_status_model
+summary(tx_status_model)
+
+## Model with US-CRS 1.0 vars, status, and hemodynamics
+tx_status_hemo_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = df_final, family = binomial)
+tx_status_hemo_model
+summary(tx_status_hemo_model)
+
+## Model with US-CRS 1.0 vars, status, hemodynamics, and time since listing
+tx_status_hemo_waitlist_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3) + ns(interval_start, df = 3)), data = df_final, family = binomial)
+tx_status_hemo_waitlist_model
+summary(tx_status_hemo_waitlist_model)
+
+## calculate weights for covariate balance assessment ##
+
+## Predict probability of transplant
+df_final$fit_prob_simple <- predict(tx_model, newdata=df_final, type = "response")
+df_final$fit_prob_status <- predict(tx_status_model, newdata=df_final, type = "response")
+df_final$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=df_final, type = "response")
+df_final$fit_prob_waitlist <- predict(tx_status_hemo_waitlist_model, newdata=df_final, type = "response")
+
+## Construct weight variables for covariate balance assessment
+df_final <- df_final %>%
+  mutate(weight_simple = if_else(transplant == 1, 1 / fit_prob_simple, 1 / (1 - fit_prob_simple)),
+         weight_status = if_else(transplant == 1, 1 / fit_prob_status, 1 / (1 - fit_prob_status)),
+         weight_hemo = if_else(transplant == 1, 1 / fit_prob_hemo, 1 / (1 - fit_prob_hemo)),
+         weight_waitlist = if_else(transplant == 1, 1 / fit_prob_waitlist, 1 / 1 - fit_prob_waitlist))
+
+## assess covariate balance in weighted Table 1s ##
+
+## Define variables for SMD tables
+vars <- c("albumin", "bilirubin", "eGFR", "sodium", "BNP", "BNP_NT_Pro", "durable_LVAD", "short_MCS_ever", "status", "cpo", "api", "papi", "interval_start")
+
+# make unweighted table
+tabUnweighted <- CreateTableOne(vars = vars, strata = "transplant", data = df_final, test = FALSE)
+print(tabUnweighted, smd = TRUE) # exact = "stage", quote = TRUE, noSpaces = TRUE
+
+## make weight_simple table
+df_weights_simple <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_simple)
+tabWeighted_simple <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_simple, test = FALSE)
+print(tabWeighted_simple, smd = TRUE)
+
+## make weight_status table
+df_weights_status <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_status)
+tabWeighted_status <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_status, test = FALSE)
+print(tabWeighted_status, smd = TRUE)
+
+## make weight_hemo table
+df_weights_hemo <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_hemo)
+tabWeighted_hemo <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_hemo, test = FALSE)
+print(tabWeighted_hemo, smd = TRUE)
+
+## make weight_waitlist table
+df_weights_waitlist <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_waitlist)
+tabWeighted_waitlist <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_waitlist, test = FALSE)
+print(tabWeighted_waitlist, smd = TRUE)
+
+# with chosen model, set probability of not receiving a transplant each week
+df_final = df_final %>%
+  mutate(prob_no_tx = 1 - fit_prob_status)
+```
+
+## Fit numerator model for stabilized weights
+For stabilized weights, we also need to model the time-varying probability of transplant based on variables at baseline, which is, for us, at the start of a 6-week window. Any variables in the numerator model have to be included in the marginal structural model, so we restricted to the variables in US-CRS 1.0 (the base model) for this step. Again, we estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the entire discrete-time dataset from listing to removal, but divided into non-overlapping 6-week windows, with predictors collected at the start of the window.
+
+Note that rows after removal/transplant are not needed for modeling the probability of transplant, because after removal, the probability of transplant is 0.
+```{r}
+
+## create numerator of stabilized weights ##
+# we want Pr(transplant) given variables at start of 6-week window
+# for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of df_final
+
+# create 6-week windows of df_final
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(window=ceiling(row_number()/6),
+         week_from_baseline = (row_number() - 6*(window-1))) %>%
+  ungroup()
+# df_final %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
+df_final = df_final %>%
+  group_by(PX_ID,window) %>%
+  mutate(albumin_at_start = first(albumin),
+         bilirubin_at_start = first(bilirubin),
+         eGFR_at_start = first(eGFR),
+         sodium_at_start = first(sodium),
+         BNP_at_start = first(BNP),
+         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+         durable_LVAD_at_start = first(durable_LVAD),
+         short_mcs_ever_at_start = first(short_MCS_ever)) %>%
+  ungroup()
+
+# fit transplant model
+## just US-CRS variables bc anything in this numerator model has to be in the mortality model
+tx_model_first = glm(
+   transplant ~ 
+    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = df_final, family = binomial)
+summary(tx_model_first)
+
+```
+
+
+## Split data into training / testing sets - START HERE
+All 1-week intervals that began between 1/1/2019 and 12/31/2022, for candidates listed by 11/15/2022, were retained in the model training data, while all other 1-week intervals were held out in a test set for model assessment.
+```{r}
+# confirm listing dates and current dates
+with(df_final,tapply(can_listing_dt,train_test_split,summary))
+with(df_final,tapply(current_date,train_test_split,summary))
+
 #temporally split training and testing sets
-train_data = df_final %>% filter(current_date >= "2019-01-01" & current_date_end <= "2022-12-31")
-test_data = df_final %>% filter(current_date_end >= "2023-01-01")
-train_data %>% select(PX_ID, current_date, interval_start)
+train_data = df_final %>% filter(train_test_split == "train")
+test_data = df_final %>% filter(train_test_split == "test")
 
 save(test_data, file = "mortality_model_test_data.RData")
 
@@ -53,9 +212,6 @@ train_data = train_data %>%
   mutate(
   week = interval_start / 7 + 1
 ) %>% relocate(week, .after = CAN_LISTING_CTR_CD)
-
-train_data %>% select(PX_ID,week,interval_start,interval_stop,transplant,outcome,time_until_censor_after_delisting,time_until_death_after_delisting) %>% head(15)
-
 ```
 
 
@@ -164,51 +320,7 @@ train_data %>% filter(transplant==1,row_number()!=n())
 train_data = train_data %>% select(-any_tx,-duplicates_after_delisting)
 ```
 
-# Fit transplant model, create probability of no transplant variable
-```{r}
 
-# fitting transplant model to entire dataset
-tx_status_hemo_model = glm(formula = as.formula(
-   transplant ~ 
-    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
-    ns(BNP, df = 3)*BNP_NT_Pro + 
-    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = df_final, family = binomial)
-
-train_data = train_data %>% ungroup() %>% mutate(
-  prob_no_tx = 1 - predict(tx_status_hemo_model, newdata = train_data, type = "response"))
-
-
-## create numerator of stabilized weights ##
-# we want Pr(transplant) given variables at start of 6-week window
-# for simplicity (and to avoid correlated data), we will do this in nonoverlapping 6-week windows of df_final
-
-# create 6-week windows of df_final
-df_final = df_final %>%
-  group_by(PX_ID) %>%
-  mutate(window=ceiling(row_number()/6)) %>%
-  ungroup()
-df_final %>% select(PX_ID,interval_start,interval_stop,transplant,window) %>% head(20)
-df_final = df_final %>%
-  group_by(PX_ID,window) %>%
-  mutate(albumin_at_start = first(albumin),
-         bilirubin_at_start = first(bilirubin),
-         eGFR_at_start = first(eGFR),
-         sodium_at_start = first(sodium),
-         BNP_at_start = first(BNP),
-         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
-         durable_LVAD_at_start = first(durable_LVAD),
-         short_mcs_ever_at_start = first(short_MCS_ever),
-         lvad_years_at_start = first(lvad_years)) %>%
-  ungroup()
-
-# fit transplant model
-## just US-CRS variables bc anything in this numerator model has to be in the mortality model
-tx_model_first = glm(formula = as.formula(
-   transplant ~ 
-    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start), data = df_final, family = binomial)
-summary(tx_model_first)
-
-```
 
 ## Adjust transplant and prob_no_tx variables
 ```{r}
