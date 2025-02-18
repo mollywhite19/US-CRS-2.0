@@ -77,7 +77,13 @@ df = df  %>%
   filter(unique_date <= censor_date_end) %>% 
   group_by(PX_ID) %>%
   mutate(
-    outcome = ifelse(!is.na(CAN_REM_CD) & removal_time == t_stop & CAN_REM_CD == 13 & row_number() == n(), 1, outcome),
+    outcome = ifelse(!is.na(CAN_REM_CD) & removal_time == t_stop & CAN_REM_CD == 13, 1, outcome),
+    any_tx=any(transplant==1),
+    outcome = ifelse(any_tx,0,outcome),
+    outcome_sum = cumsum(cumsum(outcome))) %>%
+  ungroup() %>% filter(outcome_sum<=1) %>% select(-outcome_sum) %>%
+  group_by(PX_ID) %>%
+  mutate(
     need_to_censor = row_number() == n() & t_stop - t_start >  censor_date_end - as.Date(unique_date),
     t_stop = ifelse(need_to_censor, t_start + censor_date_end - as.Date(unique_date), t_stop),
     outcome = ifelse(need_to_censor, 0, outcome)
@@ -88,7 +94,7 @@ table(df$t_stop >= df$t_start)
 dim(table(df$PX_ID)) # 24883
 table(df$transplant) # 17203 
 table(df$outcome) # 4801 - includes posttx
-df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 2616 pretx deaths
+df %>% filter(outcome==1,!any_tx) %>% nrow() # 2616 pretx deaths
 
 
 ```
@@ -105,7 +111,8 @@ df %>% filter(transplant==1,!grepl("CAN_REM_DT",unique_event))
 
 # create delisting indicator
 df = df %>% mutate(
-  delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event), 1, 0)
+  delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event) &
+                       !(CAN_REM_CD %in% 13), 1, 0)
 )
 
 # create delisting_dt variable and fill
