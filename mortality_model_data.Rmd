@@ -42,6 +42,13 @@ table(df_final$outcome)
 #   current_date_end = current_date + pmin(last_active_date - current_date, 7)
 # )
 
+# fix API when negative (recode as missing, then impute w/ median)
+summary(df_final$api)
+df_final = df_final %>%
+  mutate(api = ifelse(api<0,NA,api),
+         api = ifelse(is.na(api),median(api,na.rm=T),api))
+summary(df_final$api)
+
 # time on LVAD at current_date
 df_final = df_final %>% mutate(
   lvad_years = durable_lvad_time/365.25
@@ -408,10 +415,9 @@ combined_df = train_data %>% group_by(PX_ID, week) %>%
     rown == 3 ~ ceiling(week/2)
   )) %>% arrange(PX_ID, landmark) %>% 
   relocate(landmark, .after = CAN_LISTING_CTR_CD) %>%
-  rename(week_from_baseline = rown) %>%
-  # remove landmarks where first row delisting2 > 1
   group_by(PX_ID,landmark) %>%
-  mutate(rem=first(delisting2)>1) %>% ungroup() %>% filter(!rem) %>% select(-rem)
+  mutate(week_from_baseline = row_number(),
+         rem=first(delisting2)>1) %>% ungroup() %>% filter(!rem) %>% select(-rem)
 
 # is transplant always the last week? yes
 combined_df %>% group_by(PX_ID,landmark) %>% filter(transplant==1,row_number()!=n())
@@ -504,22 +510,57 @@ ggplot(combined_df %>% ungroup() %>% filter(week_from_baseline==1),aes(interval_
 
 # Function to calculate robust confidence intervals for odds ratios
 ```{r}
-getHR <- function(model, vars, cov) {
-  # Extract the coefficients for the variable of interest
-  coef_var <- coef(model)[vars]
+# getHR <- function(model, vars, cov) {
+#   # Extract the coefficients for the variable of interest
+#   coef_var <- coef(model)[vars]
+#   
+#   # Compute the robust standard errors
+#   robust_se <- sqrt(diag(cov)[vars])
+#   
+#   # Calculate the odds ratio (OR) by exponentiating the coefficients
+#   hr <- exp(coef_var)
+#   
+#   # Calculate the 95% confidence intervals
+#   lowCI <- exp(coef_var - 1.96 * robust_se)
+#   highCI <- exp(coef_var + 1.96 * robust_se)
+#   
+#   # Return as a data frame with the OR and CIs
+#   return(data.frame(hr = hr, lowCI = lowCI, highCI = highCI))
+# }
+
+
+#############################
+# function to get HR for a linear combination of betas and normal-based CIs (helpful w/ interaction models)
+#############################
+## mod: the model object, eg, lm, glm, coxph
+## vars: names of the coefficients to be combined in a linear combination
+## comb: numeric vector (same length as vars) with multipliers for the linear combination, typically -1 or 1; default is 1 for a sum across coefficients in vars
+## cov: covariance matrix for the coefficients; default is vcov(mod) but could be provided by the user (eg, an empirical covariance matrix derived from bootstrapping)
+## alpha: significance level which determines two-sided confidence interval coverage; default is 0.05 for a 95% CI
+getHR = function(mod,vars,comb=rep(1,length(vars)),cov=vcov(mod),alpha=0.05) {
+  # get beta from mod object
+  beta = coef(mod)
+  beta[is.na(beta)] = 0
   
-  # Compute the robust standard errors
-  robust_se <- sqrt(diag(cov)[vars])
+  # get combination vector
+  c = rep(0,length(beta))
+  names(c) = names(beta)
+  c[vars] = comb
   
-  # Calculate the odds ratio (OR) by exponentiating the coefficients
-  hr <- exp(coef_var)
+  # compute the HR
+  xb = c %*% beta
+  hr = exp(xb)
   
-  # Calculate the 95% confidence intervals
-  lowCI <- exp(coef_var - 1.96 * robust_se)
-  highCI <- exp(coef_var + 1.96 * robust_se)
+  if (!all.equal(names(c),colnames(cov))) {
+    stop("Mismatched names bw beta and var-cov matrix")
+  }
   
-  # Return as a data frame with the OR and CIs
-  return(data.frame(hr = hr, lowCI = lowCI, highCI = highCI))
+  # compute the 95% CI
+  se = sqrt(t(c) %*% cov %*% c)
+  lowCI = exp(xb - qnorm(1-alpha/2)*se)
+  highCI = exp(xb + qnorm(1-alpha/2)*se)
+  p = pnorm(abs(xb/se),lower.tail=F)*2
+  return(data.frame(hr,lowCI,highCI,p))
 }
 ```
 
@@ -773,7 +814,7 @@ mort_mod_select = mod_select(mortality_model_base,list(
 mortality_model_selected = stats::update(mortality_model_base,mort_mod_select)
 mortality_model_selected
 
-# should api time be nonlinear?
+# should api be nonlinear?
 # should LVAD time be nonlinear?
 # should LVAD time be trimmed to 10 years to avoid impact of extreme values?
 
@@ -791,18 +832,20 @@ mortality_model_full = glm(
   data = combined_df %>% mutate(
     lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)),
   weights = sweight, family = binomial)
-AIC(mortality_model_full) # 64900.64 
+AIC(mortality_model_full) # 65730.16
 mortality_model_full
 
 # knots for LVAD years
 attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"knots")
 attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"Boundary.knots")
 
-
 # get robust SEs
-
+mortality_model_full_VCOV = vcovCL(mortality_model_full, cluster = ~ PX_ID)
+mortality_model_full_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_full)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_full,vars=var_interest,cov=mortality_model_full_VCOV))
+}))
+mortality_model_full_sum
 ```
-
 
 ## Calculate predicted survival without transplant in training data
 ```{r}
@@ -879,6 +922,232 @@ prob_surv_6wk_status
 
 ```
 
+
+## Summarize spline effects by LVAD vs not
+```{r}
+## LVAD interactions with: bilirubin, BNP, eGFR, sodium
+
+## bilirubin
+bili_range = with(pred_data,seq(min(log(bilirubin_at_start+1)),max(log(bilirubin_at_start+1)),length.out=200))
+bili_spl = ns(bili_range,df=3,
+              knots=attr(mortality_model_full$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"Boundary.knots"))
+bili_rr = cbind.data.frame(
+  bilirubin_trans = rep(bili_range,2),
+  durable_lvad = c(rep(0,length(bili_range)),rep(1,length(bili_range))),
+  rbind.data.frame(
+    do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("bili",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})),
+    do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("bili",names(coef(mortality_model_full)))],
+                  comb=rep(row,2),
+                  cov=mortality_model_full_VCOV)}))))
+ggplot(bili_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+       aes(x=exp(bilirubin_trans)-1,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     breaks=c(.25,.5,1,2,4,8),limits=c(.25,8),
+                     oob = scales::rescale_none) +
+  scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+  labs(x="Bilirubin",y="Adjusted hazard ratio (95% CI)",
+       linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+
+## eGFR
+egfr_range = with(pred_data,seq(min(eGFR_at_start),max(eGFR_at_start),length.out=200))
+egfr_spl = ns(egfr_range,df=3,
+              knots=attr(mortality_model_full$model$`ns(eGFR_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(eGFR_at_start, df = 3)`,"Boundary.knots"))
+egfr_rr = cbind.data.frame(
+  egfr = rep(egfr_range,2),
+  durable_lvad = c(rep(0,length(egfr_range)),rep(1,length(egfr_range))),
+  rbind.data.frame(
+    do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("eGFR",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})),
+    do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("eGFR",names(coef(mortality_model_full)))],
+                  comb=rep(row,2),
+                  cov=mortality_model_full_VCOV)}))))
+ggplot(egfr_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+       aes(x=egfr,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     breaks=c(.25,.5,1,2,4,8),limits=c(.25,8),
+                     oob = scales::rescale_none) +
+  scale_x_continuous(breaks=seq(0,120,20),limits=c(0,120),oob = scales::rescale_none) +
+  labs(x="eGFR",y="Adjusted hazard ratio (95% CI)",
+       linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+
+# sodium
+sod_range = with(pred_data,seq(min(sodium_at_start),max(sodium_at_start),length.out=200))
+sod_spl = ns(sod_range,df=3,
+              knots=attr(mortality_model_full$model$`ns(sodium_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(sodium_at_start, df = 3)`,"Boundary.knots"))
+sod_rr = cbind.data.frame(
+  sodium = rep(sod_range,2),
+  durable_lvad = c(rep(0,length(sod_range)),rep(1,length(sod_range))),
+  rbind.data.frame(
+    do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("sodium",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})),
+    do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("sodium",names(coef(mortality_model_full)))],
+                  comb=rep(row,2),
+                  cov=mortality_model_full_VCOV)}))))
+ggplot(sod_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+       aes(x=sodium,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     breaks=2^(-8:1),limits=c(.0005,2),
+                     oob = scales::rescale_none) +
+  scale_x_continuous(breaks=seq(100,200,20),limits=c(100,200),oob = scales::rescale_none) +
+  labs(x="Sodium",y="Adjusted hazard ratio (95% CI)",
+       linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+
+## albumin
+# alb_range = with(pred_data,seq(min(albumin_at_start),max(albumin_at_start),length.out=200))
+# alb_spl = ns(alb_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(albumin_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(albumin_at_start, df = 3)`,"Boundary.knots"))
+# alb_rr = cbind.data.frame(
+#   albumin = rep(alb_range,2),
+#   durable_lvad = c(rep(0,length(alb_range)),rep(1,length(alb_range))),
+#   rbind.data.frame(
+#     do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("albumin",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("albumin",names(coef(mortality_model_full)))],
+#                   comb=rep(row,2),
+#                   cov=mortality_model_full_VCOV)}))))
+# ggplot(alb_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+#        aes(x=albumin,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+#   geom_line(color="black",linewidth=.75) +
+#   geom_hline(yintercept=1,linetype=2) +
+#   scale_y_continuous(trans='log2',minor_breaks=NULL,
+#                      breaks=c(.125/2,.125,.25,.5,1,2),limits=c(.01,2),
+#                      oob = scales::rescale_none) +
+#   # scale_x_continuous(breaks=seq(100,200,20),limits=c(100,200),oob = scales::rescale_none) +
+#   labs(x="Albumin",y="Adjusted hazard ratio (95% CI)",
+#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+#   theme_bw() +
+#   theme(text=element_text(size=14))
+
+## api
+# api_range = with(pred_data,seq(min(api_at_start),max(api_at_start),length.out=200))
+# api_spl = ns(api_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"Boundary.knots"))
+# api_rr = cbind.data.frame(
+#   api = rep(api_range,2),
+#   durable_lvad = c(rep(0,length(api_range)),rep(1,length(api_range))),
+#   rbind.data.frame(
+#     do.call(rbind.data.frame,apply(api_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("api",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     do.call(rbind.data.frame,apply(api_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("api",names(coef(mortality_model_full)))],
+#                   comb=rep(row,2),
+#                   cov=mortality_model_full_VCOV)}))))
+# ggplot(api_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+#        aes(x=api,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+#   geom_line(color="black",linewidth=.75) +
+#   geom_hline(yintercept=1,linetype=2) +
+#   scale_y_continuous(trans='log2',minor_breaks=NULL,
+#                      breaks=c(.25,.5,1,2,4,8,12),limits=c(.000005,100),
+#                      oob = scales::rescale_none) +
+#   scale_x_continuous(breaks=seq(-10,20,5),limits=c(-10,20),oob = scales::rescale_none) +
+#   labs(x="API",y="Adjusted hazard ratio (95% CI)",
+#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+#   theme_bw() +
+#   theme(text=element_text(size=14))
+
+## working
+# BNP
+bnp_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==0),
+                  seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
+bnp_nt_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==1),
+                  seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
+bnp_spl = ns(c(bnp_range,bnp_nt_range),df=3,
+              knots=attr(mortality_model_full$model$`ns(log(BNP_at_start + 1), df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(log(BNP_at_start + 1), df = 3)`,"Boundary.knots"))
+bnp_rr = cbind.data.frame(
+  bnp = rep(c(bnp_range,bnp_nt_range),2),
+  bnp_nt_pro = rep(c(rep(0,length(bnp_range)),rep(1,length(bnp_nt_range))),2),
+  durable_lvad = c(rep(0,length(c(bnp_range,bnp_nt_range))),rep(1,length(c(bnp_range,bnp_nt_range)))),
+  rbind.data.frame(
+    # BNP_NT_Pro=0, LVAD=0
+    do.call(rbind.data.frame,apply(bnp_spl[1:200,],1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full))) & !grepl("BNP_NT",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})),
+    # BNP_NT_Pro=1, LVAD=0
+    do.call(rbind.data.frame,apply(bnp_spl[201:400,],1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full)))][1:7],
+                  comb=c(row,1,row),
+                  cov=mortality_model_full_VCOV)})),
+    # BNP_NT_Pro=0, LVAD=1
+    do.call(rbind.data.frame,apply(bnp_spl[1:200,],1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full))) & !grepl("BNP_NT",names(coef(mortality_model_full)))],
+                  comb=rep(row,2),
+                  cov=mortality_model_full_VCOV)})),
+    # BNP_NT_Pro=1, LVAD=1
+    do.call(rbind.data.frame,apply(bnp_spl[201:400,],1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full)))],
+                  comb=rep(c(row,1,row),2),
+                  cov=mortality_model_full_VCOV)}))
+    ))
+ggplot(bnp_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+       aes(x=bnp,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     # breaks=c(.25,.5,1,2,4,8),
+                     #limits=c(.3,200),
+                     oob = scales::rescale_none) +
+  facet_grid(~bnp_nt_pro,scales="free_x") +
+  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+  labs(x="BNP",y="Adjusted hazard ratio (95% CI)",
+       linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+
+```
 
 
 ## Forest plot
