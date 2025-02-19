@@ -136,7 +136,7 @@ gc()
 ## remove people missing status
 table_data = df_final %>% filter(!is.na(status)) %>%
   # randomly grab 100k rows or it takes too long
-  ## NOTE: we should run with the full dataset (or at least full training set) for the paper
+  ## WORKING: we should run with the full dataset (or at least full training set) for the paper
   slice_sample(n=100000)
 
 # make unweighted table
@@ -276,7 +276,7 @@ train_data = train_data %>%
 ## Adjust delisting time variables to censor at 6 weeks and create additional rows after delisting
 ```{r}
 
-# Censoring at 6 weeks
+# Adjust delisting time variables to censor at 6 weeks
 # Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
 # If candidates dies more than 4/5 weeks after delisting, they are censored
 train_data = train_data %>% group_by(PX_ID) %>% 
@@ -372,7 +372,7 @@ table(train_data$transplant,train_data$delisting) # quick check
 
 
 
-# Create duplicate observations for each landmark - START HERE
+# Create duplicate observations for each landmark
 ```{r}
 # save current version, without duplicates for landmarks
 train_data_short = train_data
@@ -387,12 +387,13 @@ train_data = train_data %>%
     TRUE ~ 2
   ))
   
-train_data = train_data %>%  # Ensure duplicate_amount is at least 1
+# create duplicate rows
+train_data = train_data %>%
   slice(rep(row_number(), duplicate_amount+1)) %>% relocate(duplicate_amount, .after = CAN_LISTING_CTR_CD)
 ```
 
-## Define landmark variable as function of PX_ID, week, and row_number
-## Remove transplant observations
+## Define landmark variable as function of PX_ID, week, and duplicate number
+Also, remove transplant rows, when candidates were censored mid-week.
 ```{r}
 
 combined_df = train_data %>% group_by(PX_ID, week) %>%
@@ -407,27 +408,10 @@ combined_df = train_data %>% group_by(PX_ID, week) %>%
     rown == 3 ~ ceiling(week/2)
   )) %>% arrange(PX_ID, landmark) %>% 
   relocate(landmark, .after = CAN_LISTING_CTR_CD) %>%
-  select(-rown) %>%
+  rename(week_from_baseline = rown) %>%
   # remove landmarks where first row delisting2 > 1
   group_by(PX_ID,landmark) %>%
   mutate(rem=first(delisting2)>1) %>% ungroup() %>% filter(!rem) %>% select(-rem)
-combined_df %>% filter(PX_ID==1251148) %>% select(PX_ID,landmark,week,interval_start,interval_stop,transplant,outcome,delisting,delisting2,prob_no_tx) %>% View()
-
-
-
-# # Adjust outcome variable so it's only 1 in the last week of each patient who dies
-# combined_df = combined_df %>% ungroup() %>% 
-#   group_by(PX_ID) %>%
-#   fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = 'down') %>%
-#   group_by(PX_ID, landmark) %>%
-#   mutate(
-#     outcome = case_when(
-#       outcome == 1 & row_number() == n() & CAN_REM_CD != 4 ~ 1,
-#       week == max(week) & week %% 2 == 0 & !is.na(time_until_death_after_delisting) & time_until_death_after_delisting <= 28 ~ 1,
-#       week == max(week) & week %% 2 != 0 & !is.na(time_until_death_after_delisting) & time_until_death_after_delisting <= 35 ~ 1,
-#       TRUE ~ 0
-#     )
-#   )
 
 # is transplant always the last week? yes
 combined_df %>% group_by(PX_ID,landmark) %>% filter(transplant==1,row_number()!=n())
@@ -443,15 +427,9 @@ combined_df_tx = combined_df
 # remove transplant weeks
 combined_df = combined_df %>% filter(transplant == 0)
 
-
-
 ```
 
-```{r}
-combined_df %>% group_by(PX_ID) %>% select(PX_ID, landmark, week, prob_no_tx, weight) 
-```
-
-## Landmark start variables
+## Landmark start variables and calculate stabilized weights
 ```{r}
 
 
@@ -482,12 +460,7 @@ combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
   sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
 )
 
-combined_df %>% select(PX_ID, interval_start, interval_stop, time_until_death_after_delisting, outcome) %>% filter(outcome == 1)
 
-combined_df
-```
-```{r}
-combined_df %>% select(PX_ID, interval_start, interval_stop, time_until_death_after_delisting, outcome) %>% filter(PX_ID == 1254863)
 ```
 
 ## Overall distribution of weights
@@ -495,61 +468,41 @@ combined_df %>% select(PX_ID, interval_start, interval_stop, time_until_death_af
 summary(combined_df$weight)
 summary(combined_df$sweight)
 
-# some people missing weights; these are people with weird statuses?
+# some people missing weights; these are people with weird statuses
 combined_df %>% filter(is.na(weight)) %>%
-  select(albumin,bilirubin,eGFR,sodium,BNP,BNP_NT_Pro,durable_LVAD,short_MCS_ever,status,cpo,api,papi) %>%
-  ungroup() %>%
-  distinct(PX_ID)
-
-
-
+  ungroup %>%
+  count(PX_ID,status)
 ```
 
 ## Weight distributions by week within landmark
 ```{r}
-combined_df = combined_df %>% mutate(
-  week_in_landmark = row_number()
-) %>% ungroup()
-
-combined_df %>% select(PX_ID, landmark, week, week_in_landmark)
-
-with(combined_df,tapply(weight,week_in_landmark,summary))
-with(combined_df,tapply(sweight,week_in_landmark,summary))
-
-# distribution_1 = subset(combined_df, week_in_landmark == 1)
-# distribution_2 = subset(combined_df, week_in_landmark == 2)
-# distribution_3 = subset(combined_df, week_in_landmark == 3)
-# distribution_4 = subset(combined_df, week_in_landmark == 4)
-# distribution_5 = subset(combined_df, week_in_landmark == 5)
-# distribution_6 = subset(combined_df, week_in_landmark == 6)
-# 
-# summary(distribution_1$weight)
-# summary(distribution_2$weight)
-# summary(distribution_3$weight)
-# summary(distribution_4$weight)
-# summary(distribution_5$weight)
-# summary(distribution_6$weight)
+with(combined_df,tapply(weight,week_from_baseline,summary))
+with(combined_df,tapply(sweight,week_from_baseline,summary))
 
 # how many rows w/ weights above 10 for each week?
-with(combined_df,tapply(weight,week_in_landmark,function(x) table(x>10)))
-
-
-
+with(combined_df,tapply(weight,week_from_baseline,function(x) table(x>10)))
+with(combined_df,tapply(sweight,week_from_baseline,function(x) table(x>10)))
 ```
 
 ## Distribution of landmarks
+WORKING: Might be better to show this with dates?
 ```{r}
 # give some indication of which landmarks are contributing most strongly to estimates
 ## effectively averaging over this distribution
 
-library(ggplot2)
-ggplot(combined_df %>% distinct(PX_ID,landmark),aes(2*(landmark-1))) +
+combined_df %>% ungroup() %>% filter(week_from_baseline==1) %>%
+  count(interval_start/7)
+
+ggplot(combined_df %>% ungroup() %>% filter(week_from_baseline==1),aes(interval_start/7)) +
   geom_bar() +
-  scale_x_continuous(breaks=seq(0,300,50)) +
+  coord_cartesian(xlim=c(0,500)) +
+  # scale_x_continuous(breaks=seq(0,300,50)) +
   labs(x="Landmark start point (weeks from listing)",
        y="Sample size") +
   theme_bw()
 ```
+
+# Function to calculate robust confidence intervals for odds ratios
 ```{r}
 getHR <- function(model, vars, cov) {
   # Extract the coefficients for the variable of interest
@@ -571,39 +524,49 @@ getHR <- function(model, vars, cov) {
 ```
 
 
-## Mortality model without weights
+## Recode BNP_NT_Pro as character
 ```{r}
 combined_df = combined_df %>% mutate(
   BNP_NT_Pro_at_start = as.character(BNP_NT_Pro_at_start)
 )
+```
+
+## Mortality model without weights
+All linear effects, including hemodynamics.
+```{r}
 mortality_model_no_weights = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
-
-summary(mortality_model_no_weights)
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
+mortality_model_no_weights
 
 # for landmark model, use robust SEs (bc of repeat observations from same px_id)
 ## also known as GEE with working independence model
+
+# load package
 library(sandwich)
+
+# calculate robust VCOV matrix
 mortality_model_no_weights_VCOV = vcovCL(mortality_model_no_weights, cluster = ~ PX_ID)
 sqrt(diag(mortality_model_no_weights_VCOV))
-summary(mortality_model_no_weights)$coef[,"Std. Error"]
-library(survival)
-# summary with robust CIs
+summary(mortality_model_no_weights)$coef[,"Std. Error"] # smaller than robust SEs
+
+# model summary with robust CIs
 mortality_model_no_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_no_weights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_no_weights,vars=var_interest,cov=mortality_model_no_weights_VCOV))
 }))
+mortality_model_no_weights_sum
 
 # first landmark only (from listing) - just curious
 mortality_model_no_weights1 = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) +  sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = subset(combined_df,landmark==1), family = binomial)
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start +  sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = subset(combined_df,landmark==1), family = binomial)
 mortality_model_no_weights1
 sqrt(diag(vcovCL(mortality_model_no_weights1, cluster = ~ PX_ID)))
 summary(mortality_model_no_weights1)$coef[,"Std. Error"] # robust vs model-based variance are similar with only one landmark, which is as expected bc there is technically no correlated data with one landmark, just nonoverlapping survival intervals
 
 ```
 
+## Fit US-CRS 1.0
 ```{r}
 # lvad test variable for turning lvad variable into "currently qualifying by lvad"
 df_intervals = df_intervals %>% dplyr::mutate(
@@ -636,9 +599,7 @@ uscrs_model
 ```{r}
 mortality_model_weights = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = weight, family = binomial)
-
-
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = weight, family = binomial)
 mortality_model_weights
 
 # summary with robust CIs
@@ -647,15 +608,14 @@ mortality_model_weights_VCOV = vcovCL(mortality_model_weights, cluster = ~ PX_ID
 mortality_model_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_weights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_weights,vars=var_interest,cov=mortality_model_weights_VCOV))
 }))
+mortality_model_weights_sum
 ```
 
 ## Mortality model with stabilized weights
 ```{r}
 mortality_model_sweights = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = sweight, family = binomial)
-
-
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = sweight, family = binomial)
 mortality_model_sweights
 
 # summary with robust CIs
@@ -663,13 +623,15 @@ mortality_model_sweights_VCOV = vcovCL(mortality_model_sweights, cluster = ~ PX_
 mortality_model_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_sweights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_sweights,vars=var_interest,cov=mortality_model_sweights_VCOV))
 }))
+mortality_model_sweights_sum
+```
 
-# compare unweighted and weighted
+
+## Compare unweighted and weighted model coefficients
+```{r}
 plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
           mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
           mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"))
-plotdat
-mortality_model_weights_sum
 ggplot(plotdat %>% filter(var!="(Intercept)"),
        aes(x = log(hr), y = var, color = model)) +
   geom_point(position = position_dodge(width = 0.5)) +
@@ -682,31 +644,10 @@ ggplot(plotdat %>% filter(var!="(Intercept)"),
 ```
 
 
-
-## Check distribution by mcs variable
-```{r}
-short_mcs = combined_df %>% filter(short_mcs_ever_at_start == 1)
-no_short_mcs = combined_df %>% filter(short_mcs_ever_at_start == 0)
-
-summary(short_mcs$weight)
-summary(no_short_mcs$weight)
-
-# weights increase the most in short-term MCS who do not die, and no-short-term MCS who die
-short_mcs %>% group_by(PX_ID,landmark) %>%
-  mutate(diff=last(weight)-first(weight)) %>%
-  slice(n()) %>%
-  ungroup() %>% with(.,tapply(diff,outcome,summary))
-no_short_mcs %>% group_by(PX_ID,landmark) %>%
-  mutate(diff=last(weight)-first(weight)) %>%
-  slice(n()) %>%
-  ungroup() %>% with(.,tapply(diff,outcome,summary))
-
-```
-
 ## Truncate weights and rerun model
 ```{r}
 # truncate stabilized weights at 1st and 99th
-combined_df = combined_df %>% group_by(week_in_landmark) %>% mutate(
+combined_df = combined_df %>% group_by(week_from_baseline) %>% mutate(
   tweight = ifelse(sweight > quantile(sweight,probs=.99,na.rm=T), 
                    quantile(sweight,probs=.99,na.rm=T), sweight),
   tweight = ifelse(sweight < quantile(sweight,probs=.01,na.rm=T), 
@@ -715,13 +656,12 @@ combined_df = combined_df %>% group_by(week_in_landmark) %>% mutate(
 summary(combined_df$sweight)
 summary(combined_df$tweight)
 # a little low; mean weight < 1
-with(combined_df,tapply(tweight,week_in_landmark,summary))
+with(combined_df,tapply(tweight,week_from_baseline,summary))
 
+# fit model with truncated weights
 mortality_model_tweights = glm(formula = as.formula(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):as.character(BNP_NT_Pro_at_start) + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = tweight, family = binomial)
-
-
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = tweight, family = binomial)
 mortality_model_tweights
 
 # summary with robust CIs
@@ -729,7 +669,11 @@ mortality_model_tweights_VCOV = vcovCL(mortality_model_tweights, cluster = ~ PX_
 mortality_model_tweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_tweights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_tweights,vars=var_interest,cov=mortality_model_tweights_VCOV))
 }))
+mortality_model_tweights_sum
+```
 
+# Compare unweighted, weighted, stabilized, truncated
+```{r}
 # compare unweighted and weighted
 plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
           mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
@@ -748,7 +692,197 @@ ggplot(plotdat %>% filter(var!="(Intercept)"),
 
 ```
 
+## Model selection function
 ```{r}
+#############################
+# function to do forward or backward selection by AIC - more customized than MASS::stepAIC()
+## output: returns the selected model formula
+#############################
+## fit: the model object, eg, lm, glm
+## consider_vars: a named list where each element contains a possible change to the formula of fit. Should include + or - to indicate whether each variable is being added or removed from the formula.
+mod_select = function(fit,consider_vars) {
+  continue=T
+  while (continue==T) {
+    print("Current model:")
+    print(formula(fit))
+    print(paste("Current AIC:",AIC(fit)))
+    AIC_test = lapply(consider_vars,function(var) {
+      # update the model
+      fit_test = stats::update(fit,as.formula(paste0(". ~ .",var)))
+      return(AIC(fit_test))
+    })
+    if (AIC(fit) > min(as.numeric(AIC_test))) {
+      select_var_name = names(consider_vars)[which.min(as.numeric(AIC_test))]
+      print(paste("Selected variable for addition/removal:",select_var_name))
+      select_var_full = consider_vars[select_var_name]
+      fit = stats::update(fit,as.formula(paste0("~ .",select_var_full)))
+      consider_vars = consider_vars[names(consider_vars) != select_var_name]
+      continue=T
+    } else {
+      continue=F
+      print("No variables selected for addition/removal")
+    }
+    if (length(consider_vars)==0) {print("No variables left to consider");continue=F}
+  }
+  print("Final fit:")
+  print(formula(fit))
+  print(paste("Final AIC:",AIC(fit)))
+  return(formula(fit))
+}
+```
+
+## Model selection
+With the stabilized weights, perform forward selection, starting from the US-CRS 1.0 base model and considering whether the following reduce AIC:
+
+   - Nonlinear effects of all continuous US-CRS 1.0 variables
+
+   - Hemodynamics: PAPI, API, CPO
+  
+   - Two-way interactions of durable LVAD with sodium, albumin, bilirubin, eGFR, BNP
+
+   - Total years on durable LVAD
+
+WORKING: Try adding week (1-6), time since listing, previous values, interactions of current and previous values. Also, should we consider trimming to extreme quantiles (1st, 99th) to mitigate the impact of extreme (but plausible) values?
+```{r}
+# fit base model w/ stabilized weights
+mortality_model_base = glm(
+  outcome ~ 
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start, data = combined_df, weights = sweight, family = binomial)
+
+# model selection by AIC
+mort_mod_select = mod_select(mortality_model_base,list(
+  cpo="+cpo_at_start",
+  api="+api_at_start",
+  papi="+papi_at_start",
+  albumin_ns = "-albumin_at_start+ns(albumin_at_start,df=3)",
+  bilirubin_ns = "-log(bilirubin_at_start+1)+ns(log(bilirubin_at_start+1),df=3)",
+  eGFR_ns = "-eGFR_at_start+ns(eGFR_at_start,df=3)",
+  BNP_ns = "-log(BNP_at_start + 1)*BNP_NT_Pro_at_start+ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start",
+  sodium_ns = "-sodium_at_start+ns(sodium_at_start,df=3)",
+  lvad_time = "+lvad_years_at_start",
+  lvad_alb = "+durable_LVAD_at_start:albumin_at_start",
+  lvad_bili = "+durable_LVAD_at_start:log(bilirubin_at_start+1)",
+  lvad_eGFR = "+durable_LVAD_at_start:eGFR_at_start",
+  lvad_sod = "+durable_LVAD_at_start:sodium_at_start"
+  ))
+## Base AIC: 66911
+## Selected on Feb 18:
+# lvad_time (66566), albumin_ns (66401), eGFR_ns (66251), api (66150), BNP_ns (66094), bilirubin_ns (66067), sodium_ns (66041), lvad_eGFR (66018), lvad_bili (65999), lvad_sod (65993)
+
+# fit final model
+mortality_model_selected = stats::update(mortality_model_base,mort_mod_select)
+mortality_model_selected
+
+# should api time be nonlinear?
+# should LVAD time be nonlinear?
+# should LVAD time be trimmed to 10 years to avoid impact of extreme values?
+
+mortality_model_full = glm(
+  outcome ~ 
+    ns(albumin_at_start,df=3) + 
+    ns(log(bilirubin_at_start + 1),df=3)*durable_LVAD_at_start + 
+    ns(eGFR_at_start,df=3)*durable_LVAD_at_start + 
+    ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start*durable_LVAD_at_start + 
+    ns(sodium_at_start,df=3)*durable_LVAD_at_start + 
+    durable_LVAD_at_start + 
+    short_mcs_ever_at_start +
+    ns(lvad_years_at_start,df=3) + #,knots=c(6,8)) +
+    ns(api_at_start,df=3), 
+  data = combined_df %>% mutate(
+    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)),
+  weights = sweight, family = binomial)
+AIC(mortality_model_full) # 64900.64 
+mortality_model_full
+
+# knots for LVAD years
+attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"knots")
+attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"Boundary.knots")
+
+
+# get robust SEs
+
+```
+
+
+## Calculate predicted survival without transplant in training data
+```{r}
+# trim LVAD years and just take the first week of each landmark
+pred_data = combined_df %>%
+  mutate(lvad_years_at_start =
+           ifelse(lvad_years_at_start>10,10,lvad_years_at_start)) %>%
+  filter(week_from_baseline==1)
+
+# predict hazard of death within the week
+pred_data$haz_dth = predict(mortality_model_full,newdata=pred_data,type="response")
+
+# convert to probability of surviving 6 weeks
+pred_data$prob_surv_6wk = (1-pred_data$haz_dth)^6
+summary(pred_data$prob_surv_6wk)
+quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
+```
+
+## Calculate 6-week survival by time on LVAD
+```{r}
+# Map the 6-week probability to the status system
+mortality_model_status = glm(
+  outcome ~ status_at_start,
+  data = combined_df,
+  weights = weight, # in the absence of transplant
+  family = binomial)
+haz_dth_status = predict(mortality_model_status,newdata=data.frame(status_at_start=factor(1:6,levels=levels(combined_df$status_at_start))),type="response")
+prob_surv_6wk_status = (1-haz_dth_status)^6
+prob_surv_6wk_status
+
+# how many LVAD years do you need to move from status 4 to status 3?
+
+# set values for predicting
+new_data_lvad <- data.frame(
+  albumin_at_start = mean(pred_data$albumin_at_start[pred_data$durable_LVAD_at_start==1]),
+  bilirubin_at_start = mean(pred_data$bilirubin_at_start[pred_data$durable_LVAD_at_start==1]),
+  eGFR_at_start = mean(pred_data$eGFR_at_start[pred_data$durable_LVAD_at_start==1]),
+  BNP_at_start = mean(pred_data$BNP_at_start[pred_data$durable_LVAD_at_start==1 & 
+                                               pred_data$BNP_NT_Pro_at_start=="0"]),
+  BNP_NT_Pro_at_start = "0",
+  sodium_at_start = mean(pred_data$sodium_at_start[pred_data$durable_LVAD_at_start==1]),
+  durable_LVAD_at_start = 1,
+  short_mcs_ever_at_start = 0,
+  cpo_at_start = mean(pred_data$cpo_at_start[pred_data$durable_LVAD_at_start==1]),
+  api_at_start = mean(pred_data$api_at_start[pred_data$durable_LVAD_at_start==1]),
+  papi_at_start = mean(pred_data$papi_at_start[pred_data$durable_LVAD_at_start==1]),
+  lvad_years_at_start = seq(0,10,.2)
+)
+head(new_data_lvad)
+pred_lvad <- predict(mortality_model_full, 
+                newdata = new_data_lvad,
+                type = "response")
+new_data_lvad$pred_surv_6_weeks = (1-pred_lvad)^6
+
+# make plot
+## add distribution of years on LVAD
+## add lines for Status 3 and 4
+ggplot(new_data_lvad, aes(x = lvad_years_at_start, y = pred_surv_6_weeks)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Effect of LVAD years on 6-week survival probability in durable LVAD patients",
+    x = "Years with LVAD",
+    y = "6-week survival without transplant"
+  ) +
+  theme_minimal() + 
+  coord_cartesian(xlim=c(0,10),
+                  ylim=c(.97,1)) +
+  scale_x_continuous(breaks=seq(0,10,1)) +
+  geom_hline(yintercept=prob_surv_6wk_status["3"]) +
+  geom_text(aes(0,prob_surv_6wk_status["3"],label="Status 3",vjust=-1)) +
+  geom_hline(yintercept=prob_surv_6wk_status["4"]) +
+  geom_text(aes(0,prob_surv_6wk_status["4"],label="Status 4",vjust=-1))
+prob_surv_6wk_status
+
+```
+
+
+
+## Forest plot
+```{r,eval=F}
 # Extract coefficients and confidence intervals
 coef1 <- summary(mortality_model_no_weights)$coefficients
 coef2 <- summary(uscrs_model)$coefficients
@@ -783,10 +917,6 @@ df2
 forest_df
 class(df_intervals$BNP_NT_Pro)
 setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start"))
-```
-
-## Forest plot
-```{r}
 
 # Rename and reorder variables
 new_names <- c("sodium_at_start" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start" = "PAPI", "log(BNP_at_start + 1):BNP_NT_Pro_at_start0" = "Log BNP, Regular BNP", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP, NT-proBNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start" = "CPO", "api_at_start" = "API", "albumin_at_start" = "Albumin" )
@@ -805,11 +935,7 @@ ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
 
 new_names
 ```
-```{r}
-df_final %>% filter(is.na(durable_lvad_implant_dt) & durable_LVAD == 1)
-df_final %>% filter(status_criteria == "CriteriaLvadSupport") %>% select(current_date, durable_lvad_implant_dt, durable_LVAD)
 
-```
 
 ```{r}
 mortality_model_sweights_lvad_time = glm(formula = as.formula(
@@ -842,8 +968,6 @@ summary(combined_df$durable_lvad_time)
 
 ```
 ```{r}
-library(ggplot2)
-library(splines) # For rcs
 combined_df$BNP_at_start
 table(combined_df$BNP_NT_Pro_at_start)
 
@@ -886,8 +1010,6 @@ combined_df$surv_prob_6week_sweight = (1-combined_df$sweights_predictions)^6
 new_data %>% select(lvad_years_at_start, predicted)
 
 summary(combined_df$surv_prob_6week_sweight)
-
-library(ggplot2)
 
 # survival probability histogram
 ggplot(combined_df, aes(x = surv_prob_6week_sweight)) +
