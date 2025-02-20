@@ -862,6 +862,19 @@ pred_data$haz_dth = predict(mortality_model_full,newdata=pred_data,type="respons
 pred_data$prob_surv_6wk = (1-pred_data$haz_dth)^6
 summary(pred_data$prob_surv_6wk)
 quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
+
+# summarize survival probability by status
+with(pred_data,tapply(prob_surv_6wk,status_at_start,summary))
+
+# plot distributions
+library(ggforce)
+ggplot(pred_data %>% filter(!is.na(status),!(status=="inactive")),
+       aes(x = status_at_start, y = prob_surv_6wk)) +
+  geom_boxplot(alpha=.25) + 
+  facet_zoom(y = prob_surv_6wk > .95) +  
+  labs(x = "Status", y = "6-Week Survival Probability", title = "Figure 1: Box plots of predicted 6-week survival without transplant\nin adult heart candidates, 2019-2022, by status") +
+  theme_bw()
+ggsave("pred-by-status.png",width=6,height=4)
 ```
 
 ## Calculate 6-week survival by time on LVAD
