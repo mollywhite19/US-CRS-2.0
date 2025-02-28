@@ -1,0 +1,73 @@
+---
+title: "sens_analysis"
+output: html_document
+date: "2024-12-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+load("discrete_final_data.RData")
+library(dplyr)
+library(splines)
+library(tidyr)
+library(ggplot2)
+
+
+# recode outcome as 0 if patient received transplant
+## want outcome to be an indicator of pretx death
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(any_tx=any(transplant==1)) %>%
+  ungroup() %>%
+  mutate(outcome = ifelse(any_tx,0,outcome))
+df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1926 - yay!
+
+# date for end of interval
+df_final = df_final %>% mutate(
+  current_date_end = current_date + pmin(last_active_date - current_date, 7)
+)
+
+df_final = df_final %>% mutate(
+  lvad_years = durable_lvad_time/365.25
+)
+
+df_final = df_final %>% group_by(PX_ID) %>%
+  mutate(
+  sens_outcome = case_when(
+    outcome == 1 & row_number() == n() ~ 1,
+    delisting == 1 & row_number() == n() ~ 1,
+    TRUE ~ 0
+    )
+)
+
+df_final %>% select(death_time, interval_stop, time_until_death_after_delisting, sens_outcome) %>% filter(any(sens_outcome == 1))
+
+df_final %>% filter(is.na(CAN_REM_CD))
+df_final %>% mutate(
+  o
+)
+
+```
+
+```{r}
+#temporally split training and testing sets
+train_data = df_final %>% filter(current_date >= "2019-01-01" & current_date_end <= "2022-12-31")
+test_data = df_final %>% filter(current_date_end >= "2023-01-01")
+train_data %>% select(PX_ID, current_date, interval_start)
+
+
+```
+
+```{r}
+train_data = train_data %>% 
+  mutate(
+  week = interval_start / 7 + 1
+) %>% relocate(week, .after = CAN_LISTING_CTR_CD)
+
+train_data %>% select(PX_ID,week,interval_start,interval_stop,transplant,outcome,time_until_censor_after_delisting,time_until_death_after_delisting) %>% head(15)
+
+```
+
+
+

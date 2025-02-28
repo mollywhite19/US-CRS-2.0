@@ -734,7 +734,7 @@ ggplot(plotdat %>% filter(var!="(Intercept)"),
   geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
   labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
   geom_vline(xintercept=0)  +
-  xlim(c(-5,5))
+  xlim(c(-3,3))
 ggsave("stabilized_weights_lvad_time.png", height = 7, width = 16)
 summary(combined_df$durable_lvad_time)
 
