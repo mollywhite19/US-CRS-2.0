@@ -1,5 +1,5 @@
 ---
-title: "btt-discrete-time"
+title: "Create 1-week discrete-time dataset"
 output: html_document
 date: "2024-06-06"
 ---
@@ -10,13 +10,15 @@ date: "2024-06-06"
 rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 # Molly:
-load("C:/Users/mhwhi/Downloads/heart_post_policy (13).RData")
-df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat')
+# load("C:/Users/mhwhi/Downloads/heart_post_policy (13).RData")
+# df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat')
 
 # Grace:
-# load("heart_post_policy.RData")
-# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
-# df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'))
+load("heart_post_policy.RData")
+groups(df) # PX_ID grouping
+curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
+df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'),
+                                col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
 
 library(renv)
 library(dplyr)
@@ -25,16 +27,18 @@ library(lubridate)
 library(table1)
 library(purrr)
 
-# change this variable to customize inclusion criteria - see heart_pipeline_final.rmd
+# Set cohort dates and censoring dates
 censor_date_end = mdy("12-31-2023")
-
-
+censor_date_train = mdy("12-31-2022")
+filter_date_start = mdy("01-01-2019")
+filter_date_end_train = mdy("11-15-2022")
 
 # Retain listing date, transplant date for waiting time calculations
 df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event), unique_date, NA),
-                   transplant_date = if_else(grepl("REC_TX_DT", unique_event), unique_date, NA)) %>% fill(can_listing_dt, transplant_date, .direction = "downup")
+                   transplant_date = if_else(grepl("REC_TX_DT", unique_event), unique_date, NA)) %>%
+  fill(can_listing_dt, transplant_date, .direction = "downup")
 
-
+# CHECK THIS - gets earliest date at each status
 df = df %>%
   group_by(PX_ID, status) %>%  # Assuming PX_ID is the patient identifier
   mutate(
@@ -51,20 +55,33 @@ df = df %>%
 
 df = df %>% group_by(PX_ID) %>%
   mutate(
+  durable_LVAD_old=durable_LVAD,
   durable_LVAD = case_when(
     durable_LVAD == 1 ~ 1,
     durable_lvad_implant_dt <= unique_date ~ 1,
+    ## CHECK THIS - Are we setting durable_LVAD=1 before they're on a VAD?
     is.na(durable_lvad_implant_dt) & any(durable_LVAD == 1) ~ 1,
     TRUE ~ 0
-  )
-) %>% ungroup()
-
+  )) %>%
+  ungroup()
+# is this a mistake to recode durable_LVAD=1 early, for people like this?
+df %>% filter(PX_ID==936345) %>% 
+  select(PX_ID,can_listing_dt,unique_event,unique_date,status,durable_lvad_implant_dt,
+         durable_LVAD,durable_LVAD_old) %>%
+  head(20)
 ```
 
-## Censor candidates past December 31st, 2023
+## Make composite outcome (death or deterioration) and censor candidates on December 31st, 2023
 ```{r}
 df = df  %>% 
   filter(unique_date <= censor_date_end) %>% 
+  group_by(PX_ID) %>%
+  mutate(
+    outcome = ifelse(!is.na(CAN_REM_CD) & removal_time == t_stop & CAN_REM_CD == 13, 1, outcome),
+    any_tx=any(transplant==1),
+    outcome = ifelse(any_tx,0,outcome),
+    outcome_sum = cumsum(cumsum(outcome))) %>%
+  ungroup() %>% filter(outcome_sum<=1) %>% select(-outcome_sum) %>%
   group_by(PX_ID) %>%
   mutate(
     need_to_censor = row_number() == n() & t_stop - t_start >  censor_date_end - as.Date(unique_date),
@@ -74,10 +91,10 @@ df = df  %>%
 table(df$t_stop >= df$t_start)
 
 # some numbers
-dim(table(df$PX_ID)) # 24516
-table(df$transplant) # 16963
-table(df$outcome) # 4045 - includes posttx
-df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!any_tx) %>% nrow() # 1926 pretx deaths
+dim(table(df$PX_ID)) # 24883
+table(df$transplant) # 17203 
+table(df$outcome) # 4801 - includes posttx
+df %>% filter(outcome==1,!any_tx) %>% nrow() # 2616 pretx deaths
 
 
 ```
@@ -86,31 +103,35 @@ df %>% mutate(any_tx=any(transplant==1)) %>% ungroup() %>% filter(outcome==1,!an
 ## Determine time to death / censor for these candidates
 ```{r}
 
- # only one person with rows/death after removal
+ # few people with rows/death after removal
 df %>% filter(cumsum(cumsum(grepl("CAN_REM_DT", unique_event)))>1) %>% select(PX_ID,unique_event,outcome)
+
+# confirm that all transplant recipients have CAN_REM_DT in unique_event
+df %>% filter(transplant==1,!grepl("CAN_REM_DT",unique_event))
 
 # create delisting indicator
 df = df %>% mutate(
-  delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event), 1, 0)
+  delisting = ifelse(grepl("CAN_REM_DT", unique_event) & !grepl("REC_TX_DT", unique_event) &
+                       !(CAN_REM_CD %in% 13), 1, 0)
 )
 
-
+# create delisting_dt variable and fill
 df = df %>% group_by(PX_ID) %>% mutate(
   delisting_dt = if_else(delisting == 1, unique_date, NA)
 ) %>% fill(delisting_dt, .direction = "downup") %>% ungroup()
-
 
 # similar to row from transplant to death/censoring, make one row from delisting to death
 df = df %>% group_by(PX_ID) %>%
   mutate(delisting = cumsum(cumsum(delisting)),
          t_stop = ifelse(delisting == 1, last(t_stop), t_stop),
          outcome = ifelse(delisting == 1, last(outcome), outcome)) %>%
-  filter(delisting <= 1)
+  filter(delisting <= 1) %>%
+  ungroup
 
 # make time from delisting to death/censor
 df = df %>% mutate(
   time_until_death_after_delisting = ifelse(delisting == 1 & outcome == 1, t_stop - t_start, NA),
-  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, censor_date_end - as.Date(unique_date), NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up")
+  time_until_censor_after_delisting = ifelse(delisting == 1 & outcome == 0, censor_date_end - as.Date(unique_date), NA)) %>% group_by(PX_ID) %>% fill(time_until_death_after_delisting, time_until_censor_after_delisting, .direction = "up") %>% ungroup
 
 # including posttx deaths in time_until_death_after_delisting? no
 df %>% filter(transplant==1,!is.na(time_until_death_after_delisting)) %>% nrow()
@@ -119,14 +140,12 @@ df %>% filter(transplant==1,!is.na(time_until_death_after_delisting)) %>% nrow()
 df %>% filter(outcome==1,!is.na(time_until_censor_after_delisting)) %>% nrow()
 
 # count transplant, death, delisting
-df %>% ungroup() %>% count(transplant,delisting,outcome)
-
-df %>% select(death_time, t_stop, outcome) %>% filter(any(death_time == t_stop)) 
-
+df %>% count(transplant,delisting,outcome)
 ```
 
 
-## Define short term mcs ever variables
+## Define short term MCS ever variables
+These variables need to be created before we subset to the first row per 1-week period, to ensure we are capturing all VADs.
 ```{r}
 
 df <- df %>%
@@ -148,43 +167,73 @@ df <- df %>%
 ```
 
 ## Discrete time data construction
+Expand data into 1-week discrete-time format, from listing to removal, taking variables at the start of each week. Note that `outcome` (death or deterioration) can be 1 for multiple rows after this step, if a death occurred at the end of the period. Also, `outcome` can include posttransplant deaths (just a few, due to data discrepancies with death before transplant).
+
+The important fields created by this step are `interval_start` and `interval_stop`, which are always multiples of 7. That is, `interval_stop` will be the end of the 1-week interval regardless of when death or transplant occurred. Note that `t_start` and `interval_start` are 0 on the candidate's listing date.
 ```{r}
 # create tx dataset
-# remove rows at time of transplant, removal
 df_tx = df %>% filter(transplant == 1 | (CAN_REM_CD == 4 & grepl("CAN_REM_DT",unique_event)))
+
+# remove rows after transplant, removal
+df0 = df
 df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1 |
                      n()==1)
 
+# if removal is the only row, removed on listing date
+df %>% ungroup %>% filter(grepl("CAN_REM_DT", unique_event),
+                          !grepl("LISTING",unique_event))
+df %>% ungroup %>% filter(grepl("CAN_REM_DT", unique_event),
+                          !t_start==0)
+
+# recode t_stop if removed on listing date
+df = df %>%
+  mutate(t_stop = ifelse(grepl("CAN_REM_DT",unique_event),1,t_stop))
+
 # count up transplants, deaths
-dim(table(df$PX_ID)) # 24516
-nrow(df_tx) # 16963
-df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1928 - two extra bc of posttx deaths (outcome=1 then transplant=1)
+dim(table(df$PX_ID)) # 24883
+nrow(df_tx) # 17203
+dim(table(df_tx$PX_ID)) # 17203
+df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2619 - extra bc of posttx deaths (outcome=1 then transplant=1)
 
 # look at people with t_start = t_stop
 df %>% filter(t_start==t_stop) %>%
   select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
 df %>% filter(t_start==t_stop,n()!=1) %>%
   select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
+df %>% filter(t_start==t_stop,outcome==1) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,transplant)
+df %>% filter(t_start==t_stop,delisting==1) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,death_time,outcome,delisting)
 
 # recode t_stop as 1 if t_stop=0
 ## otherwise, remove when t_start=t_stop
 df = df %>%
   mutate(t_stop=ifelse(t_stop==0,1,t_stop)) %>%
   filter(t_start!=t_stop)
-dim(table(df$PX_ID)) # 24516
+dim(table(df$PX_ID)) # 24883
+
+# CHECK THIS
+# some rows after removal_time?? Be careful with last_active_date / last_inactive_date. The max is not the last day waiting.
+df %>% select(PX_ID,unique_event,unique_date,t_start,t_stop,removal_time) %>% filter(t_start > removal_time)
+df %>% ungroup %>% filter(t_start > removal_time) %>%
+  count(outcome,transplant,delisting)
+df %>% filter(any(t_start > removal_time)) %>% ungroup %>%
+  count(outcome,transplant,delisting)
+df %>% ungroup %>% filter(t_start > removal_time) %>%
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,removal_time,can_listing_dt,last_active_date,last_inactive_date) %>% head
 
 # define period to group observations that occur within the same week
 # take first observation within each week
 # duplicate each observation based on how many days there are until the next period
-  ## duplication causes some people to have outcome=1 multiple times, if the interval ending in death lasted >1 week
+  ## NOTE: duplication causes some people to have outcome=1 multiple times, if the interval ending in death lasted >1 week
 # define interval_start, interval_stop as the 7 day periods
 
 df_final = df %>% mutate(
   period = ceiling(t_stop/7)
 ) %>% group_by(PX_ID, period) %>% 
-  # make outcome=1 for entire week if outcome=1
+  # make outcome=1 for entire period if outcome=1
   mutate(outcome = ifelse(sum(outcome)>0,1,outcome)) %>%
-  # taking the first row per week
+  # taking the first row per period
   filter(row_number() == 1) %>% 
   mutate(
     t_start = ceiling(t_start/7)*7,
@@ -193,23 +242,93 @@ df_final = df %>% mutate(
   ) %>% ungroup() %>% uncount(duplicates) %>%
   group_by(PX_ID) %>%
   mutate(interval_start = seq(0, max(t_stop) - 7, by = 7),
-                             interval_stop = interval_start + 7) %>%
+         interval_stop = interval_start + 7) %>%
   ungroup()
-df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 1928 - two extra bc of posttx deaths (outcome=1 then transplant=1)
 
-df_final
-
-```
-# Missingness before out of range fix
-```{r}
-table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure +
-    factor(durable_LVAD) + factor(ECMO_ever), data=df_final)
-
+# count deaths
+df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2619 - extra bc of posttx deaths (outcome=1 then transplant=1)
 ```
 
-
+## Add dates back into discrete dataset
+Create a `current_date` variable for the date on `interval_start`.
 ```{r}
-#out of range value flag
+# set current_date 
+df_final = df_final %>% 
+  mutate(
+    current_date = as.Date(can_listing_dt) + interval_start
+    )
+summary(df_final$current_date)
+
+# confirm no rows after delisting
+df_final %>% filter(!is.na(delisting_dt)) %>% # all delisted candidates
+  filter(removal_time < (current_date-as.Date(can_listing_dt))) %>% # removal time never before current interval
+  select(PX_ID,current_date,can_listing_dt,removal_time,interval_start,interval_stop,unique_date,unique_event)
+```
+
+## Set transplant = 1 for PX_ID in transplant list, at their last observation on the waitlist
+```{r}
+tx_patients = unique(df_tx$PX_ID)
+
+# set transplant=1 on last row of df_final
+df_final = df_final %>% group_by(PX_ID) %>%
+  mutate(
+    transplant = ifelse(row_number() == n() & PX_ID %in% tx_patients, 1, 0)
+    ) %>% 
+  select(-c(t_start, t_stop, period)) %>% # , unique_event, unique_date
+  relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD) %>%
+  ungroup
+table(df_final$transplant) # 17203
+length(tx_patients) # 17203
+
+# confirm no rows after transplant
+df_final %>% filter(transplant==1,is.na(transplant_time)) # always have a transplant_time
+df_final %>% # transplant_time never before current interval
+  filter(transplant_time < (current_date-as.Date(can_listing_dt))) %>%
+  select(PX_ID,current_date,can_listing_dt,removal_time,interval_start,interval_stop,unique_date,unique_event)
+```
+
+## Create train/test split on 1/1/2023
+For tables on missingness, subset discrete dataset to all weeks that started on or after 1/1/2019. Then separate into training and test sets. If listed by 11/15/2022, include in the model training data. Otherwise, all patients listed after 11/15/2022 and all patient follow-up starting after 12/31/2022 are in the hold-out test data.
+```{r}
+# reduce data to cohort, create train/testing split
+df_final = df_final %>% 
+  filter(current_date >= filter_date_start) %>% 
+  mutate(
+      train_test_split = ifelse(current_date <= censor_date_train & 
+                                  can_listing_dt <= filter_date_end_train, "train", "test"),
+      train_test_split = as.factor(train_test_split)
+  )
+
+# check that it worked
+with(df_final,tapply(current_date,train_test_split,summary))
+
+# how many rows per patient?
+df_final %>% group_by(PX_ID,train_test_split) %>%
+  mutate(rown=n()) %>%
+  ungroup %>%
+  with(.,tapply(rown,train_test_split,summary))
+# $test
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#    1.00   25.00   47.00   38.08   52.00   59.00 
+# 
+# $train
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#     1.0    48.0    95.0   102.3   155.0   209.0 
+```
+
+# Missing data and out-of-range values
+
+## Missingness before out of range fix
+```{r}
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final)
+
+# initial week, so that candidates appear only once
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final %>% group_by(PX_ID) %>% slice(1) %>% ungroup)
+```
+
+## Recode out-of-range values
+```{r}
+# out of range value flag
 df_final = df_final %>% mutate(
   out_of_range_flag = case_when(
     sodium < 100 | sodium > 200 ~ 1,
@@ -228,7 +347,7 @@ df_final = df_final %>% mutate(
     TRUE ~ 0)
 )
 
-#set out of range values to missing
+# set out of range values to missing
 df_final = df_final %>% mutate(
   sodium = ifelse(sodium < 100 | sodium > 200, NA, sodium),
   BNP = case_when(
@@ -250,80 +369,36 @@ df_final = df_final %>% mutate(
 
 ```
 
+## Data summary before imputation
 ```{r}
-#add dates back into dataframe
-df_final = df_final %>% mutate(
-  last_wait_date = pmax(last_active_date, last_inactive_date, na.rm = T)
-) 
-df_final = df_final %>% 
-  mutate(
-    current_date = as.Date(can_listing_dt) + interval_start
-      ) %>% mutate(
-        current_date_end = current_date + pmin(last_wait_date - current_date, 7, na.rm = T)
-      )
+df_final_preImpute = df_final
 
-
-```
-
-
-# Data summary before imputation
-```{r}
-#reduce data to cohort, create train/testing split
-table_data = df_final %>% 
-  filter(current_date >= "2019-01-01") %>% mutate(
-  train_test_split = ifelse(current_date_end < "2023-01-01", "train", "test")
-) %>% mutate(
-  train_test_split = as.factor(train_test_split)
-)
-
-
-table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + out_of_range_flag + 
-    factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=table_data) # very low percent missing except w/ BNP
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + factor(out_of_range_flag) + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final) # very low percent missing except w/ BNP
 summary(df_final$BNP[df_final$BNP_NT_Pro %in% 0]) # should be between 0 and 20000
 summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 40000
-
-
 ```
 
-
-
-## Set transplant = 1 for PX_ID in transplant list, at their last observation on the waitlist
+## Body surface area calculation
 ```{r}
-tx_patients = unique(df_tx$PX_ID)
+# impute missing candidate values based on median in our cohort
+cand_thor_impute = df_cand_thor %>%
+  filter(PX_ID %in% df_final$PX_ID) %>%
+  # summarise(med_hgt=median(CAN_HGT_CM,na.rm=T),
+  #           med_wgt=median(CAN_WGT_KG,na.rm=T))
+  mutate(CAN_HGT_CM = ifelse(is.na(CAN_HGT_CM),median(CAN_HGT_CM,na.rm=T),CAN_HGT_CM),
+         CAN_WGT_KG = ifelse(is.na(CAN_WGT_KG),median(CAN_WGT_KG,na.rm=T),CAN_WGT_KG),
+         bsa = 0.007184 * (CAN_HGT_CM ^ 0.725) * (CAN_WGT_KG ^ 0.425))
 
-df_final = df_final %>% group_by(PX_ID) %>%
-  mutate(
-  transplant = ifelse(row_number() == n() & PX_ID %in% tx_patients, 1, 0)
-) %>% select(-c(t_start, t_stop, period, unique_event, unique_date)) %>% 
-  relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD)
-
-df_final %>% filter(PX_ID == 1310477) %>% select(PX_ID, transplant)
+# merge df_final w/ cand_thor
+df_final <- left_join(df_final, cand_thor_impute, by='PX_ID')
 ```
 
-
-# Body surface area calculation
-```{r}
-# select necessary cand thor variables
-df_cand_thor <- df_cand_thor %>% select(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO)
-
-# impute missing height and weights
-df_cand_thor$CAN_HGT_CM[is.na(df_cand_thor$CAN_HGT_CM)] <-median(df_cand_thor$CAN_HGT_CM, na.rm=T)
-df_cand_thor$CAN_WGT_KG[is.na(df_cand_thor$CAN_WGT_KG)] <-median(df_cand_thor$CAN_WGT_KG, na.rm=T)
-
-# define body surface area, merge with discrete time data
-df_cand_thor <- df_cand_thor %>%
-  mutate(bsa = 0.007184 * (CAN_HGT_CM ^ 0.725) * (CAN_WGT_KG ^ 0.425)) 
-df_cand_thor <- df_cand_thor[!duplicated(df_cand_thor), ]
-df_final <- merge(df_final, df_cand_thor, by='PX_ID', all.x=T, all.y=F)
-
-
-```
-
-
-
-## Fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
+### Fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
 ```{r}
 # fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
+with(df_final, median(BNP[BNP_NT_Pro == '0'],na.rm=T))
+with(df_final, median(BNP[BNP_NT_Pro == '1'],na.rm=T))
+df_final %>% select(sodium,albumin,bilirubin,creatinine) %>% apply(.,2,median,na.rm=T)
 df_final <- df_final %>%
   mutate(
     arterial_lactate = ifelse(is.na(arterial_lactate), 1, arterial_lactate),
@@ -347,8 +422,6 @@ df_final <- df_final %>%
     bilirubin = ifelse(is.na(bilirubin), median(bilirubin, na.rm = TRUE), bilirubin),
     creatinine = ifelse(is.na(creatinine), median(creatinine, na.rm = TRUE), creatinine)
   )
-  
-
 ```
 
 ## Fill missing cardiac_output, central_venous_pressure, PASP, PADP, PCWP, systolicBP, diastolicBP, resting_HR
@@ -391,8 +464,6 @@ df_final <- df_final %>%
   )
 ```
 
-
-
 ## Calculate eGFR, define short mcs ever
 ```{r}
 df_final <- df_final %>%
@@ -411,12 +482,13 @@ df_final <- df_final %>%
 with(df_final,table(short_MCS_ever_old,short_MCS_ever,useNA="ifany"))
 
 ```
+
 ## Define hemodynamics, impute missing values
 ```{r}
 # define hemodynamics, impute missing values
 df_final <- df_final %>%
   mutate(
-    cpo = (1/541) * cardiac_output * (((2/3)*systolicBP) + ((1/3)*diastolicBP)),
+    cpo = (1/451) * cardiac_output * (((1/3)*systolicBP) + ((2/3)*diastolicBP)),
     api = (systolicBP - diastolicBP) / PCWP,
     papi = (PASP - PADP) / central_venous_pressure) %>%
   
@@ -429,12 +501,77 @@ df_final <- df_final %>%
             papi < 1 & !is.na(papi) ~ 1,
             TRUE ~ papi
     ))
- 
-
-
 ```
 
+## Table 1, with missing data
+```{r}
+## before imputation
+table_data = df_final_preImpute
+label(table_data$albumin) = "Albumin"
+label(table_data$bilirubin) = "Bilirubin"
+label(table_data$creatinine) = "Creatinine"
+label(table_data$sodium) = "Sodium"
+label(table_data$BNP) = "BNP"
+label(table_data$cardiac_output) = "Cardiac output"
+label(table_data$diastolicBP) = "Diastolic BP"
+label(table_data$systolicBP) = "Systolic BP"
+label(table_data$PCWP) = "PCWP"
+label(table_data$PASP) = "PASP"
+label(table_data$PADP) = "PADP"
+label(table_data$central_venous_pressure) = "Central venous pressure"
+table_data$out_of_range_flag = factor(table_data$out_of_range_flag)
+label(table_data$out_of_range_flag) = "Any data out of range"
+table_data$durable_LVAD = factor(table_data$durable_LVAD)
+label(table_data$durable_LVAD) = "Durable LVAD"
+table_data$ECMO_ever = factor(table_data$ECMO_ever)
+label(table_data$ECMO_ever) = "Ever on ECMO"
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + ECMO_ever + out_of_range_flag | train_test_split, data=table_data) # very low percent missing except w/ BNP
 
+# summary of number of candidates
+dim(table(df_final_preImpute$PX_ID)) # 24852
+df_final_preImpute %>% distinct(PX_ID,train_test_split) %>%
+  count(train_test_split) %>%
+  mutate(prop=n/dim(table(df_final_preImpute$PX_ID)))
+#   train_test_split     n  prop
+#   <fct>            <int> <dbl>
+# 1 test              7568 0.305
+# 2 train            19747 0.795
+
+# summary of number of rows per candidate
+df_final_preImpute %>% group_by(PX_ID,train_test_split) %>%
+    mutate(rown=n()) %>%
+    ungroup %>%
+    # with(.,tapply(rown,train_test_split,summary))
+    with(.,tapply(rown,train_test_split,sd))
+df_final_preImpute %>% group_by(PX_ID) %>%
+    mutate(rown=n()) %>%
+    ungroup %>%
+    pull(rown) %>% summary # sd
+
+## after imputation - supplement
+table_data = df_final
+label(table_data$albumin) = "Albumin"
+label(table_data$bilirubin) = "Bilirubin"
+label(table_data$creatinine) = "Creatinine"
+label(table_data$sodium) = "Sodium"
+label(table_data$BNP) = "BNP"
+label(table_data$cardiac_output) = "Cardiac output"
+label(table_data$diastolicBP) = "Diastolic BP"
+label(table_data$systolicBP) = "Systolic BP"
+label(table_data$PCWP) = "PCWP"
+label(table_data$PASP) = "PASP"
+label(table_data$PADP) = "PADP"
+label(table_data$central_venous_pressure) = "Central venous pressure"
+table_data$out_of_range_flag = factor(table_data$out_of_range_flag)
+label(table_data$out_of_range_flag) = "Any data out of range"
+table_data$durable_LVAD = factor(table_data$durable_LVAD)
+label(table_data$durable_LVAD) = "Durable LVAD"
+table_data$ECMO_ever = factor(table_data$ECMO_ever)
+label(table_data$ECMO_ever) = "Ever on ECMO"
+table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + ECMO_ever + out_of_range_flag | train_test_split, data=table_data) # very low percent missing except w/ BNP
+```
+
+## Calculate wait times
 ```{r}
 calculate_wait_times <- function(status_vector, current_date, status_start_1, status_start_2, status_start_3, status_start_4, status_start_5, status_start_6) {
   n <- length(status_vector)
@@ -578,6 +715,7 @@ df_final <- df_final %>%
 df_final  %>% select(PX_ID, status, interval_start, interval_stop, wait_1, wait_2, wait_3, wait_4, wait_5, wait_6)
 ```
 
+## Durable LVAD checks
 ```{r}
 df_final %>% select(PX_ID, current_date, durable_LVAD, durable_lvad_implant_dt, status, status_criteria) %>% filter(!is.na(durable_lvad_implant_dt) & durable_LVAD == 1 & current_date > "2018-10-18" & current_date < durable_lvad_implant_dt) %>% arrange(PX_ID)
 
@@ -591,6 +729,7 @@ df_final %>% filter(durable_LVAD == 1 & is.na(durable_lvad_implant_dt)) %>% sele
 
 ```
 
+## Calculate durable LVAD time
 ```{r}
 df_final = df_final %>% mutate(
   durable_lvad_implant_dt = as.Date(durable_lvad_implant_dt))
@@ -606,16 +745,15 @@ df_final  %>% filter(durable_LVAD == 1) %>% select(durable_lvad_implant_dt, curr
 
 ```
 
-
-# Save discrete time data
+## Save discrete time data
 ```{r}
 # check numbers
-dim(table(df_final$PX_ID)) # 24516
-table(df_final$transplant) # 16963
-df_final %>% filter(outcome==1 | !is.na(time_until_death_after_delisting)) %>% distinct(PX_ID) %>% nrow() # 1928
-table(df_final$interval_start < df_final$interval_stop)
+dim(table(df_final$PX_ID)) # 24842
+table(df_final$transplant) # 17171 
 save("df_final", file =  "discrete_final_data.RData")
 ```
+
+## Durable LVAD summary
 ```{r}
 
 df_final = df_final %>%
