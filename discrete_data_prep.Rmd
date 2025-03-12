@@ -29,16 +29,16 @@ library(purrr)
 
 # Set cohort dates and censoring dates
 censor_date_end = mdy("12-31-2023")
-censor_date_train = mdy("12-31-2022")
+censor_date_train = mdy("11-15-2022")
 filter_date_start = mdy("01-01-2019")
-filter_date_end_train = mdy("11-15-2022")
+filter_date_end_train = mdy("10-01-2022")
 
 # Retain listing date, transplant date for waiting time calculations
 df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event), unique_date, NA),
                    transplant_date = if_else(grepl("REC_TX_DT", unique_event), unique_date, NA)) %>%
   fill(can_listing_dt, transplant_date, .direction = "downup")
 
-# CHECK THIS - gets earliest date at each status
+# gets earliest date ever at each status
 df = df %>%
   group_by(PX_ID, status) %>%  # Assuming PX_ID is the patient identifier
   mutate(
@@ -59,7 +59,6 @@ df = df %>% group_by(PX_ID) %>%
   durable_LVAD = case_when(
     durable_LVAD == 1 ~ 1,
     durable_lvad_implant_dt <= unique_date ~ 1,
-    ## CHECK THIS - Are we setting durable_LVAD=1 before they're on a VAD?
     is.na(durable_lvad_implant_dt) & any(durable_LVAD == 1) ~ 1,
     TRUE ~ 0
   )) %>%
@@ -91,10 +90,10 @@ df = df  %>%
 table(df$t_stop >= df$t_start)
 
 # some numbers
-dim(table(df$PX_ID)) # 24883
-table(df$transplant) # 17203 
-table(df$outcome) # 4801 - includes posttx
-df %>% filter(outcome==1,!any_tx) %>% nrow() # 2616 pretx deaths
+dim(table(df$PX_ID)) # 24531
+table(df$transplant) # 16963  
+table(df$outcome) # 2560
+df %>% filter(outcome==1,!any_tx) %>% nrow() # 2560 pretx deaths
 
 
 ```
@@ -174,7 +173,7 @@ The important fields created by this step are `interval_start` and `interval_sto
 # create tx dataset
 df_tx = df %>% filter(transplant == 1 | (CAN_REM_CD == 4 & grepl("CAN_REM_DT",unique_event)))
 
-# remove rows after transplant, removal
+# remove rows after transplant, removal (including removal row)
 df0 = df
 df = df %>% filter(cumsum(grepl("CAN_REM_DT", unique_event))<1 |
                      n()==1)
@@ -190,10 +189,10 @@ df = df %>%
   mutate(t_stop = ifelse(grepl("CAN_REM_DT",unique_event),1,t_stop))
 
 # count up transplants, deaths
-dim(table(df$PX_ID)) # 24883
-nrow(df_tx) # 17203
-dim(table(df_tx$PX_ID)) # 17203
-df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2619 - extra bc of posttx deaths (outcome=1 then transplant=1)
+dim(table(df$PX_ID)) # 24531
+nrow(df_tx) # 16963
+dim(table(df_tx$PX_ID)) # 16963
+df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2560
 
 # look at people with t_start = t_stop
 df %>% filter(t_start==t_stop) %>%
@@ -210,7 +209,7 @@ df %>% filter(t_start==t_stop,delisting==1) %>%
 df = df %>%
   mutate(t_stop=ifelse(t_stop==0,1,t_stop)) %>%
   filter(t_start!=t_stop)
-dim(table(df$PX_ID)) # 24883
+dim(table(df$PX_ID)) # 24531
 
 # CHECK THIS
 # some rows after removal_time?? Be careful with last_active_date / last_inactive_date. The max is not the last day waiting.
@@ -219,8 +218,8 @@ df %>% ungroup %>% filter(t_start > removal_time) %>%
   count(outcome,transplant,delisting)
 df %>% filter(any(t_start > removal_time)) %>% ungroup %>%
   count(outcome,transplant,delisting)
-df %>% ungroup %>% filter(t_start > removal_time) %>%
-  select(PX_ID,unique_event,unique_date,t_start,t_stop,removal_time,can_listing_dt,last_active_date,last_inactive_date) %>% head
+df %>% ungroup %>% filter(t_start > removal_time) %>% # count(is.na(CAN_REM_CD)) ## all still waiting, not removed
+  select(PX_ID,unique_event,unique_date,t_start,t_stop,CAN_REM_CD,removal_time,can_listing_dt,last_active_date,last_inactive_date) %>% head
 
 # define period to group observations that occur within the same week
 # take first observation within each week
@@ -246,7 +245,7 @@ df_final = df %>% mutate(
   ungroup()
 
 # count deaths
-df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2619 - extra bc of posttx deaths (outcome=1 then transplant=1)
+df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2560
 ```
 
 ## Add dates back into discrete dataset
@@ -277,8 +276,8 @@ df_final = df_final %>% group_by(PX_ID) %>%
   select(-c(t_start, t_stop, period)) %>% # , unique_event, unique_date
   relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD) %>%
   ungroup
-table(df_final$transplant) # 17203
-length(tx_patients) # 17203
+table(df_final$transplant) # 16963 
+length(tx_patients) # 16963 
 
 # confirm no rows after transplant
 df_final %>% filter(transplant==1,is.na(transplant_time)) # always have a transplant_time
@@ -288,8 +287,12 @@ df_final %>% # transplant_time never before current interval
 ```
 
 ## Create train/test split on 1/1/2023
-For tables on missingness, subset discrete dataset to all weeks that started on or after 1/1/2019. Then separate into training and test sets. If listed by 11/15/2022, include in the model training data. Otherwise, all patients listed after 11/15/2022 and all patient follow-up starting after 12/31/2022 are in the hold-out test data.
+For tables on missingness, subset discrete dataset to all weeks that started on or after 1/1/2019. Then separate into training and test sets, with training follow-up through 11/15/2022 for all candidates listed by 10/01/2022.
 ```{r}
+# check number of transplants, px_id
+table(df_final$transplant) # 16963 
+dim(table(df_final$PX_ID)) # 24531
+
 # reduce data to cohort, create train/testing split
 df_final = df_final %>% 
   filter(current_date >= filter_date_start) %>% 
@@ -298,6 +301,10 @@ df_final = df_final %>%
                                   can_listing_dt <= filter_date_end_train, "train", "test"),
       train_test_split = as.factor(train_test_split)
   )
+
+# check number of transplants, px_id - lost some
+table(df_final$transplant) # 16931  
+dim(table(df_final$PX_ID)) # 24487
 
 # check that it worked
 with(df_final,tapply(current_date,train_test_split,summary))
@@ -309,11 +316,11 @@ df_final %>% group_by(PX_ID,train_test_split) %>%
   with(.,tapply(rown,train_test_split,summary))
 # $test
 #    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
-#    1.00   25.00   47.00   38.08   52.00   59.00 
+#    1.00   27.00   50.00   42.08   59.00   65.00 
 # 
 # $train
 #    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
-#     1.0    48.0    95.0   102.3   155.0   209.0 
+#     1.0    48.0    94.0   101.1   153.0   203.0 
 ```
 
 # Missing data and out-of-range values
@@ -534,8 +541,8 @@ df_final_preImpute %>% distinct(PX_ID,train_test_split) %>%
   mutate(prop=n/dim(table(df_final_preImpute$PX_ID)))
 #   train_test_split     n  prop
 #   <fct>            <int> <dbl>
-# 1 test              7568 0.305
-# 2 train            19747 0.795
+# 1 test              8052 0.329
+# 2 train            18877 0.771
 
 # summary of number of rows per candidate
 df_final_preImpute %>% group_by(PX_ID,train_test_split) %>%
@@ -748,8 +755,10 @@ df_final  %>% filter(durable_LVAD == 1) %>% select(durable_lvad_implant_dt, curr
 ## Save discrete time data
 ```{r}
 # check numbers
-dim(table(df_final$PX_ID)) # 24842
-table(df_final$transplant) # 17171 
+dim(table(df_final$PX_ID)) # 24487
+table(df_final$transplant) # 16931
+
+# save dataset
 save("df_final", file =  "discrete_final_data.RData")
 ```
 
