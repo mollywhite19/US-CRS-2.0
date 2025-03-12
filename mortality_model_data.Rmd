@@ -253,7 +253,7 @@ train_data = train_data %>%
 
 
 ## Censor the training data on 12/31/2022
-Note: This code just censors the follow-up for delisted candidates. There may be candidates whose final 1-week interval overlaps 1/1/2023 and includes a death at the start of 2023, if the interval started by 12/31/2022. That is fine as long as we don't include those deaths in the test data.
+Note: This code just censors the follow-up after removal for delisted candidates.
 ```{r}
 library(lubridate)
 censor_date_train = mdy("12-31-2022")
@@ -783,15 +783,17 @@ With the stabilized weights, perform forward selection, starting from the US-CRS
 
    - Total years on durable LVAD
 
-WORKING: Try adding week (1-6), time since listing, previous values, interactions of current and previous values. Also, should we consider trimming to extreme quantiles (1st, 99th) to mitigate the impact of extreme (but plausible) values?
+WORKING: Try adding time since listing, previous values, interactions of current and previous values. Also, should we consider trimming to extreme quantiles (1st, 99th) to mitigate the impact of extreme (but plausible) values?
 ```{r}
 # fit base model w/ stabilized weights
 mortality_model_base = glm(
   outcome ~ 
     albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start, data = combined_df, weights = sweight, family = binomial)
+AIC(mortality_model_base) # 63492.76
 
 # model selection by AIC
 mort_mod_select = mod_select(mortality_model_base,list(
+  week="+factor(week_from_baseline)",
   cpo="+cpo_at_start",
   api="+api_at_start",
   papi="+papi_at_start",
@@ -806,9 +808,9 @@ mort_mod_select = mod_select(mortality_model_base,list(
   lvad_eGFR = "+durable_LVAD_at_start:eGFR_at_start",
   lvad_sod = "+durable_LVAD_at_start:sodium_at_start"
   ))
-## Base AIC: 66911
-## Selected on Feb 18:
-# lvad_time (66566), albumin_ns (66401), eGFR_ns (66251), api (66150), BNP_ns (66094), bilirubin_ns (66067), sodium_ns (66041), lvad_eGFR (66018), lvad_bili (65999), lvad_sod (65993)
+## Base AIC: 63492.76
+## Selected on March 12:
+# lvad_time (63156), eGFR_ns (62998), albumin_ns (62846), api (62770), BNP_ns (62722), bilirubin_ns (62693), sodium_ns (62668), lvad_bili (62647), week (62635), lvad_eGFR (62625), lvad_sod (62617)
 
 # fit final model
 mortality_model_selected = stats::update(mortality_model_base,mort_mod_select)
@@ -817,9 +819,31 @@ mortality_model_selected
 # should api be nonlinear?
 # should LVAD time be nonlinear?
 # should LVAD time be trimmed to 10 years to avoid impact of extreme values?
+## answer: yes
 
 mortality_model_full = glm(
   outcome ~ 
+    factor(week_from_baseline) +
+    ns(albumin_at_start,df=3) + 
+    ns(log(bilirubin_at_start + 1),df=3)*durable_LVAD_at_start + 
+    ns(eGFR_at_start,df=3)*durable_LVAD_at_start + 
+    ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start + #*durable_LVAD_at_start + 
+    ns(sodium_at_start,df=3)*durable_LVAD_at_start + 
+    durable_LVAD_at_start + 
+    short_mcs_ever_at_start +
+    ns(lvad_years_at_start,df=3) + #,knots=c(6,8)) +
+    ns(api_at_start,df=3), 
+  data = combined_df %>% mutate(
+    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)),
+  weights = sweight, family = binomial)
+AIC(mortality_model_full) # 62386
+
+# should LVAD also interact with BNP?
+## answer: yes
+
+mortality_model_full2 = glm(
+  outcome ~ 
+    factor(week_from_baseline) +
     ns(albumin_at_start,df=3) + 
     ns(log(bilirubin_at_start + 1),df=3)*durable_LVAD_at_start + 
     ns(eGFR_at_start,df=3)*durable_LVAD_at_start + 
@@ -832,10 +856,13 @@ mortality_model_full = glm(
   data = combined_df %>% mutate(
     lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)),
   weights = sweight, family = binomial)
-AIC(mortality_model_full) # 65730.16
-mortality_model_full
+AIC(mortality_model_full2) # 62331
+mortality_model_full = mortality_model_full2
 
-# knots for LVAD years
+# look at model
+summary(mortality_model_full)
+
+# look at knots for LVAD years
 attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"knots")
 attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"Boundary.knots")
 
@@ -849,19 +876,49 @@ mortality_model_full_sum
 
 ## Calculate predicted survival without transplant in training data
 ```{r}
-# trim LVAD years and just take the first week of each landmark
-pred_data = combined_df %>%
-  mutate(lvad_years_at_start =
-           ifelse(lvad_years_at_start>10,10,lvad_years_at_start)) %>%
-  filter(week_from_baseline==1)
+## function to calculate predicted survival
+### note: newdata should be filtered to week 1 from each landmark; predictions will be made based on covariates at the start of that week
 
-# predict hazard of death within the week
-pred_data$haz_dth = predict(mortality_model_full,newdata=pred_data,type="response")
+pred_data_fun = function(newdata) {
+  # trim LVAD years to 10
+  newdata = newdata %>%
+    ungroup() %>%
+    mutate(lvad_years_at_start =
+             ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
+  
+  # create an ID variable
+  newdata$tmp_id = 1:nrow(newdata)
+  
+  # expand each row to six rows and create week_from_baseline
+  pred_data = newdata[rep(1:nrow(newdata), each = 6), ]  # Duplicate each row 6 times
+  pred_data$week_from_baseline = rep(1:6, times = nrow(newdata))
+  
+  # predict hazard of death within the week
+  pred_data$haz_dth = predict(mortality_model_full,newdata=pred_data,type="response")
 
-# convert to probability of surviving 6 weeks
-pred_data$prob_surv_6wk = (1-pred_data$haz_dth)^6
+  # calculate probability of surviving 6 weeks
+  pred_data = pred_data %>%
+    group_by(tmp_id) %>%
+    mutate(prob_surv_6wk = cumprod(1-haz_dth)) %>%
+    slice(n()) %>%
+    ungroup() %>%
+    mutate(week_from_baseline=1) %>% select(-tmp_id)
+  
+  # return pred_data
+  return(pred_data)
+}
+
+# get predicted 6-week survival from training data, including all landmarks
+pred_data = pred_data_fun(combined_df %>% filter(week_from_baseline==1))
 summary(pred_data$prob_surv_6wk)
 quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
+
+## SAVE MORTALITY MODEL
+# also, function to calculate predicted 6-week survival
+# also, model for numerator of stabilized weights
+save(mortality_model_full,pred_data_fun,tx_model_first,file="mortality-model.Rdata")
+
+
 
 # summarize survival probability by status
 with(pred_data,tapply(prob_surv_6wk,status_at_start,summary))
