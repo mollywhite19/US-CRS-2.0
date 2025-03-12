@@ -285,7 +285,7 @@ cand_list = cand_thor %>%
   filter(CAN_LISTING_DT <= filter_date_end) %>%
   
   # Remove heart-lung and lung-only recipients
-  #filter(WL_ORG != "HL") %>%   
+  filter(WL_ORG != "HL") %>%   
   filter(WL_ORG != "LU") %>% 
 
   # Remove recipients who were < 18 yrs old at listing
