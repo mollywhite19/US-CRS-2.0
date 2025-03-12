@@ -10,15 +10,15 @@ date: "2024-06-06"
 rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 # Molly:
-# load("C:/Users/mhwhi/Downloads/heart_post_policy (13).RData")
-# df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat')
+load("C:/Users/mhwhi/Downloads/heart_post_policy.RData")
+df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat', col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
 
 # Grace:
-load("heart_post_policy.RData")
-groups(df) # PX_ID grouping
-curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
-df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'),
-                                col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
+# load("heart_post_policy.RData")
+# groups(df) # PX_ID grouping
+# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
+# df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'),
+#                                 col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
 
 library(renv)
 library(dplyr)
@@ -26,6 +26,7 @@ library(tidyr)
 library(lubridate)
 library(table1)
 library(purrr)
+library(ggplot2)
 
 # Set cohort dates and censoring dates
 censor_date_end = mdy("12-31-2023")
@@ -487,6 +488,7 @@ df_final <- df_final %>%
          case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' | CAN_ECMO %in% 1 ~ 1,
            TRUE ~ 0))
 with(df_final,table(short_MCS_ever_old,short_MCS_ever,useNA="ifany"))
+
 
 ```
 
