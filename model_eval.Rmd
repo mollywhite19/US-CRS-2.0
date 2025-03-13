@@ -5,16 +5,19 @@ date: "2024-07-15"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+#rm(list = ls())
+load("C:/Users/mhwhi/Downloads/mortality-model.RData")
+load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
+library(rms)
+library(tidyr)
 library(dplyr)
 library(haven)
 library(tidyr)
 library(purrr)
 library(riskRegression)
 library(survival)
-#retain only mortality model after running mortality_model_data file
-rm(list = setdiff(ls(), "mortality_model_sweights"))
-load("mortality_model_test_data.RData")
+library(ggplot2)
+library(splines)
 ```
 
 
@@ -22,6 +25,7 @@ load("mortality_model_test_data.RData")
 
 
 ```{r}
+#create week varianble
 test_data = test_data %>% 
   mutate(
   week = interval_start / 7 + 1
@@ -38,12 +42,75 @@ test_data = test_data %>% mutate(can_listing_dt = as.Date(can_listing_dt),
 
 
 #most recent date on waitlist
-test_data = test_data %>% mutate(
+#not using this rn but have it just in case
+test_data = test_data %>%group_by(PX_ID) %>% mutate(
   last_wait_date = pmax(last_active_date, last_inactive_date, na.rm = T)
 ) 
+
 ```
 
 
+```{r}
+#expanding out to follow up 6 week post delisting
+test_data = test_data %>% group_by(PX_ID) %>% 
+  
+  mutate(
+    # if we have full follow-up for the week, follow for censoring (floor)
+    time_until_censor_after_delisting = 
+      case_when(row_number() == n() & !is.na(time_until_censor_after_delisting) ~ 
+                  floor(pmax(0,removal_time + time_until_censor_after_delisting - interval_stop)/7)*7,
+                T ~ NA),
+    # follow for death even w/o full week (ceiling)
+    time_until_death_after_delisting = 
+      case_when(row_number() == n() & !is.na(time_until_death_after_delisting) ~ 
+                  ceiling(pmax(0,removal_time + time_until_death_after_delisting - interval_stop)/7)*7,
+                T ~ NA)) %>%
+  
+  fill(time_until_censor_after_delisting,time_until_death_after_delisting,.direction="downup") %>%
+
+  # censor at 6 weeks
+  mutate(time_until_censor_after_delisting = case_when(
+    time_until_censor_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
+    time_until_censor_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
+    time_until_death_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
+    time_until_death_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
+    TRUE ~ time_until_censor_after_delisting
+  ),
+    # recode time to death as missing if censored
+    time_until_death_after_delisting = ifelse(!is.na(time_until_censor_after_delisting),NA,
+                                              time_until_death_after_delisting),
+    outcome = ifelse(!is.na(time_until_censor_after_delisting),0,outcome)
+    
+)
+
+## Determine delisting row and # of duplicates we need after delisting, until death or censoring
+test_data = test_data %>% group_by(PX_ID) %>% mutate(
+  delisting = case_when(
+    (!is.na(time_until_death_after_delisting) | !is.na(time_until_censor_after_delisting)) & row_number() == n() ~ 1,
+    TRUE ~ 0)
+  ) %>% ungroup() %>% mutate(
+  duplicates_after_delisting = case_when(
+    delisting == 1 & time_until_death_after_delisting > 0 ~
+      time_until_death_after_delisting/7,
+    delisting == 1 & time_until_censor_after_delisting > 0 ~ 
+      time_until_censor_after_delisting/7,
+  TRUE ~ 0))
+
+## repeat rows for the duplicates after delisting
+# and recode interval_start, interval_stop
+test_data = test_data %>%
+  slice(rep(row_number(), duplicates_after_delisting+1)) %>%
+  group_by(PX_ID) %>%
+  mutate(week=row_number()) %>%
+  group_by(PX_ID,duplicates_after_delisting) %>%
+  mutate(dup=row_number()-1) %>%
+  ungroup() %>%
+  mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
+         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop),
+         status = ifelse(dup>0 & delisting == 1, "off_waitlist", status))
+
+
+```
 
 
 
@@ -60,56 +127,78 @@ test_data = test_data %>%
   ))
 
 
-test_data %>% select(last_active_date, status, current_date, wait_time, wait_1, wait_2, wait_3)
 ```
 ```{r}
+#clean up lvad variable
+test_data = test_data %>% mutate(
+  durable_LVAD = ifelse(!is.na(durable_lvad_implant_dt) & current_date < durable_lvad_implant_dt, 0, durable_LVAD)
+)
 #start variables for the model testing
 test_data = test_data %>% mutate(
   bilirubin_at_start = bilirubin,
   albumin_at_start = albumin,
   eGFR_at_start = eGFR,
-  BNP_NT_Pro_at_start = BNP_NT_Pro,
+  BNP_NT_Pro_at_start = ifelse(BNP_NT_Pro == 1, as.character(1), as.character(0)),
   BNP_at_start = BNP,
   sodium_at_start = sodium,
   durable_LVAD_at_start = durable_LVAD,
   short_mcs_ever_at_start = short_MCS_ever,
   cpo_at_start = cpo,
   api_at_start = api,
-  papi_at_start = papi
+  papi_at_start = papi,
+  lvad_years_at_start = lvad_years
 )
+
+
 ```
 
 
 ```{r}
-# Time to event based on death, tx, or censoring
+# Time to event based on death, removal for deterioration, tx, or censoring
 
 test_data = test_data %>% mutate(
   time_to_death = case_when(
-    !is.na(death_date_max) ~ death_date_max - current_date,
+    !is.na(death_time) ~ death_time - interval_start,
     TRUE ~ NA
   ),
-  death6week = case_when(
-    !is.na(time_to_death) & time_to_death <= 42 ~ 1,
-    TRUE ~ 0
-  ),
-  time_to_transplant = case_when(
-    any(transplant) == 1 ~ as.Date(transplant_date) - current_date,
+  time_to_removal_deteriorate = case_when(
+    !is.na(CAN_REM_CD) & CAN_REM_CD == 13 ~ removal_time - interval_start,
     TRUE ~ NA
+  ),
+  time_to_transplant = as.numeric(case_when(
+    any(transplant == 1) ~ as.Date(transplant_date) - current_date,
+    TRUE ~ NA
+  ))
+) 
+
+test_data = test_data %>% 
+  mutate(
+    time = pmin(time_to_transplant, time_to_death, time_to_removal_deteriorate, 42, na.rm = T)
   )
-)
 
-test_data = test_data %>% mutate(
-  time = pmin(time_to_death, time_to_transplant, 42, na.rm=T)
-)
+# define follow up time in weeks, outcome dependent on whether it ocurred in interval
+test_data = test_data %>% 
+  mutate(
+    follow_up_int = case_when(
+      time == time_to_transplant ~ floor(time/7) - 1,
+      time == time_to_death ~ floor(time/7),
+      time == time_to_removal_deteriorate ~ floor(time/7),
+      TRUE ~ 6
+    ),
+    outcome = case_when(
+      time == time_to_transplant ~ 0,
+      time == time_to_death ~ 1,
+      time == time_to_removal_deteriorate ~ 1,
+      TRUE ~ 0
+    )
+  )
+
+#filter out inactives and post delisting dates
+test_data_actives = test_data %>% filter(!(status %in% c("inactive", "off_waitlist")))
 
 
-test_data_actives = test_data %>% filter(status != "inactive")
-
-#make sure death6week captures all 6 week deaths
-test_data_actives %>% filter(death6week == 0 & death_date_max - current_date <= 42) %>% select(current_date, death_date_max, death6week, outcome, time_to_death, last_wait_date)
-
-first_int %>% select(CAN_REM_CD)
 ```
+
 
 
 
@@ -168,7 +257,7 @@ eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixt
 ```
 
 ```{r}
-# Rank patients by statys and wait time
+# Rank patients by status and wait time
 # If status and wait time are the same, set the rank to be equal
 
 first_int = first_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
@@ -211,163 +300,433 @@ eighth_int = eighth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>%
   group_by(status, wait_time) %>%
   mutate(rank = first(rank))
 
+#check rank variable
+#Higher for higher waiting time, flip for AUC calculations if necessary
 first_int %>% filter(status == 4) %>% arrange(desc(wait_time)) %>% select(PX_ID, status, wait_time, rank)
+
 ```
 
 
 
 ```{r}
 # Extract 6 week survival probability of our model
-first_int$status_predict = predict(mortality_model_sweights, newdata = first_int, type = "response")
-first_int$prob_surv_sweights = (1-first_int$status_predict)^6
+# Convert to vector ? (Troubleshooting the AUC problems)
+first_int = pred_data_fun(first_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-second_int$status_predict = predict(mortality_model_sweights, newdata = second_int, type = "response")
-second_int$prob_surv_sweights = (1-second_int$status_predict)^6
+second_int = pred_data_fun(second_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-third_int$status_predict = predict(mortality_model_sweights, newdata = third_int, type = "response")
-third_int$prob_surv_sweights = (1-third_int$status_predict)^6
+third_int = pred_data_fun(third_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-fourth_int$status_predict = predict(mortality_model_sweights, newdata = fourth_int, type = "response")
-fourth_int$prob_surv_sweights = (1-fourth_int$status_predict)^6
+fourth_int = pred_data_fun(fourth_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-fifth_int$status_predict = predict(mortality_model_sweights, newdata = fifth_int, type = "response")
-fifth_int$prob_surv_sweights = (1-fifth_int$status_predict)^6
+fifth_int = pred_data_fun(fifth_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-sixth_int$status_predict = predict(mortality_model_sweights, newdata = sixth_int, type = "response")
-sixth_int$prob_surv_sweights = (1-sixth_int$status_predict)^6
+sixth_int = pred_data_fun(sixth_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-seventh_int$status_predict = predict(mortality_model_sweights, newdata = seventh_int, type = "response")
-seventh_int$prob_surv_sweights = (1-seventh_int$status_predict)^6
+seventh_int = pred_data_fun(seventh_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-eighth_int$status_predict = predict(mortality_model_sweights, newdata = eighth_int, type = "response")
-eighth_int$prob_surv_sweights = (1-eighth_int$status_predict)^6
+eighth_int = pred_data_fun(eighth_int) %>% mutate(
+  pred_surv_6wk = as.vector(prob_surv_6wk)
+)
 
-
+second_int
 ```
 
 
 
 ```{r}
 # Flip the predictors to be higher when the candidate is higher risk of death
-first_int = first_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-second_int = second_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-third_int = third_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-fourth_int = fourth_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-fifth_int = fifth_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-sixth_int = sixth_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-seventh_int = seventh_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
-eighth_int = eighth_int %>% mutate(
-  rank = 1/rank,
-  prob_surv_sweights = 1 - prob_surv_sweights
-)
+# Keep out for now since we are using predicted probability of survival in AUC
+
+# first_int = first_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# second_int = second_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# third_int = third_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# fourth_int = fourth_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# fifth_int = fifth_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# sixth_int = sixth_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# seventh_int = seventh_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+# eighth_int = eighth_int %>% 
+#   ungroup() %>% mutate(
+#   rank = 1/rank,
+#   prob_surv_6wk = 1 - prob_surv_6wk,
+#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
+#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
+# )
+
+
+methods(predictRisk)
 ```
 
+
+```{r}
+auc6wk <- Score(
+  list("uscrs" = pred_surv_6wk, "status" = rank),
+  formula = Hist(follow_up_int, outcome) ~ ns(albumin,df=3) + ns(bilirubin,df=3) + ns(eGFR,df=3) + ns(sodium,df=3) + ns(BNP,df=3)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
+  data = first_int %>% mutate(follow_up_int = ifelse(outcome==0,follow_up_int+0.001,follow_up_int)),
+  cens.method = "ipcw", cens.model = "cox",
+  conf.int = TRUE,
+  times = 6,
+  metrics = c("auc"),
+  conservative = T
+)
+
+```
 
 
 
 
 ```{r}
 # Function to calculate AUC using predicted probabilities directly
-calculate_auc = function(data, prob_column) {
-  auc_value <- Score(list(data[[prob_column]]), 
-                     formula = death6week ~ 1,  # Only the response variable
-                     data = data, 
-                     metrics = c("AUC"), 
-                     model = FALSE)  # Set model to FALSE
-  
-  # Extract AUC and CI
-  auc <- auc_value$AUC$score$AUC
-  ci_low <- auc_value$AUC$score$lower  # Lower CI
-  ci_high <- auc_value$AUC$score$upper # Upper CI
-  
-  return(c(AUC = auc, CI_Lower = ci_low, CI_Upper = ci_high))
-}
+# calculate_auc = function(data, prob_column) {
+#   auc_value <- Score(list(data[[prob_column]]), 
+#                      formula = death6week ~ 1,  # Only the response variable
+#                      data = data, 
+#                      metrics = c("AUC"), 
+#                      model = FALSE)  # Set model to FALSE
+#   
+#   # Extract AUC and CI
+#   auc <- auc_value$AUC$score$AUC
+#   ci_low <- auc_value$AUC$score$lower  # Lower CI
+#   ci_high <- auc_value$AUC$score$upper # Upper CI
+#   
+#   return(c(AUC = auc, CI_Lower = ci_low, CI_Upper = ci_high))
+# }
+# 
+# # List of datasets
+# datasets <- list(
+#   first_int = first_int,
+#   second_int = second_int,
+#   third_int = third_int,
+#   fourth_int = fourth_int,
+#   fifth_int = fifth_int,
+#   sixth_int = sixth_int,
+#   seventh_int = seventh_int,
+#   eighth_int = eighth_int
+# )
+# 
+# # Specify the column names for the predicted probabilities and rank
+# prob_column_name <- "uscrs_score"  # Column for first predictor
+# rank_column_name <- "rank"  # Column for second predictor
+# 
+# # Initialize a data frame to store results
+# results <- data.frame(Model = character(), 
+#                       AUC = numeric(), 
+#                       CI_Lower = numeric(), 
+#                       CI_Upper = numeric(),
+#                       Predictor = character())  # To differentiate predictors
+# 
+# # Loop through datasets and compute AUCs for both predictors
+# for (i in seq_along(datasets)) {
+#   data_name <- paste0("Model ", i)  # Set model name as Model 1, Model 2, etc.
+#   data <- datasets[[i]]
+#   
+#   # Calculate AUC for prob_surv_sweights
+#   auc_result_prob <- calculate_auc(data, prob_column_name)
+#   results <- rbind(results, data.frame(Model = data_name, 
+#                                         AUC = auc_result_prob["AUC"], 
+#                                         CI_Lower = auc_result_prob["CI_Lower"], 
+#                                         CI_Upper = auc_result_prob["CI_Upper"],
+#                                         Predictor = "US-CRS 2.0"))
+#   
+#   # Calculate AUC for rank
+#   auc_result_rank <- calculate_auc(data, rank_column_name)
+#   results <- rbind(results, data.frame(Model = data_name, 
+#                                         AUC = auc_result_rank["AUC"], 
+#                                         CI_Lower = auc_result_rank["CI_Lower"], 
+#                                         CI_Upper = auc_result_rank["CI_Upper"],
+#                                         Predictor = "Status Quo"))
+# }
+# 
+# # Convert Model to a factor with specified levels for ordering
+# results$Model <- factor(results$Model, levels = paste0("Model ", 1:8))
+# dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
+#                           "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
+# results$Date <- rep(dates, each = 2)
+# 
+# 
+# # Plot AUC values with confidence intervals
+# ggplot(results, aes(x = Date, y = AUC, ymin = CI_Lower, ymax = CI_Upper, color = Predictor)) +
+#   geom_point() +
+#   geom_line() +
+#   geom_errorbar(alpha = 0.3) +
+#   labs(title = "AUC Comparison 2023",
+#        x = "Date",
+#        y = "AUC Value") +
+#   theme_minimal() +
+#   scale_y_continuous(limits = c(0,1)) + 
+#   scale_x_continuous(breaks = as.numeric(dates), 
+#                      labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023", 
+#                                 "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023")) # Adjust x-axis formatting as needed
+```
 
-# List of datasets
-datasets <- list(
-  first_int = first_int,
-  second_int = second_int,
-  third_int = third_int,
-  fourth_int = fourth_int,
-  fifth_int = fifth_int,
-  sixth_int = sixth_int,
-  seventh_int = seventh_int,
-  eighth_int = eighth_int
-)
+```{r}
+# Load necessary libraries
+# library(pROC)
+# 
+# # Select a single dataset (time point)
+# selected_data <- second_int  # Change this to select a different time point
+# 
+# # Specify the predicted probability column names
+# prob_column_name <- "prob_surv_sweights"  # Predictor 1 (US-CRS 2.0)
+# rank_column_name <- "rank"  # Predictor 2 (Status Quo)
+# 
+# # Compute ROC curves for both predictors
+# roc_prob <- roc(selected_data$death6week, selected_data[[prob_column_name]])  # US-CRS 2.0
+# roc_rank <- roc(selected_data$death6week, selected_data[[rank_column_name]])  # Status Quo
+# 
+# # Extract ROC data for both models
+# roc_data_prob <- data.frame(
+#   specificity = rev(roc_prob$specificities),
+#   sensitivity = rev(roc_prob$sensitivities),
+#   model = "US-CRS 2.0"
+# )
+# 
+# roc_data_rank <- data.frame(
+#   specificity = rev(roc_rank$specificities),
+#   sensitivity = rev(roc_rank$sensitivities),
+#   model = "Status Quo"
+# )
+# 
+# # Combine data for both models
+# roc_data <- rbind(roc_data_prob, roc_data_rank)
+# 
+# # Plot ROC curves using ggplot2
+# ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+#   geom_line(size = 1) +  # ROC curves
+#   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +  # Diagonal line
+#   labs(title = "ROC Curve on Feb 15, 2023",
+#        x = "False positive rate",
+#        y = "True positive rate",
+#        color = "Predictor") +
+#   scale_color_manual(values = c("blue", "red")) +  # Custom colors for differentiation
+#   theme_minimal()
 
-# Specify the column names for the predicted probabilities and rank
-prob_column_name <- "prob_surv_sweights"  # Column for first predictor
-rank_column_name <- "rank"  # Column for second predictor
+```
 
-# Initialize a data frame to store results
-results <- data.frame(Model = character(), 
-                      AUC = numeric(), 
-                      CI_Lower = numeric(), 
-                      CI_Upper = numeric(),
-                      Predictor = character())  # To differentiate predictors
-
-# Loop through datasets and compute AUCs for both predictors
-for (i in seq_along(datasets)) {
-  data_name <- paste0("Model ", i)  # Set model name as Model 1, Model 2, etc.
-  data <- datasets[[i]]
-  
-  # Calculate AUC for prob_surv_sweights
-  auc_result_prob <- calculate_auc(data, prob_column_name)
-  results <- rbind(results, data.frame(Model = data_name, 
-                                        AUC = auc_result_prob["AUC"], 
-                                        CI_Lower = auc_result_prob["CI_Lower"], 
-                                        CI_Upper = auc_result_prob["CI_Upper"],
-                                        Predictor = "US-CRS 2.0"))
-  
-  # Calculate AUC for rank
-  auc_result_rank <- calculate_auc(data, rank_column_name)
-  results <- rbind(results, data.frame(Model = data_name, 
-                                        AUC = auc_result_rank["AUC"], 
-                                        CI_Lower = auc_result_rank["CI_Lower"], 
-                                        CI_Upper = auc_result_rank["CI_Upper"],
-                                        Predictor = "Status Quo"))
-}
-
-# Convert Model to a factor with specified levels for ordering
-results$Model <- factor(results$Model, levels = paste0("Model ", 1:8))
-dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
-                          "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
-results$Date <- rep(dates, each = 2)
+```{r}
+# getHR = function(mod,vars,comb=rep(1,length(vars)),cov=vcov(mod),alpha=0.05) {
+#   # get beta from mod object
+#   beta = coef(mod)
+#   beta[is.na(beta)] = 0
+#   
+#   # get combination vector
+#   c = rep(0,length(beta))
+#   names(c) = names(beta)
+#   c[vars] = comb
+#   
+#   # compute the HR
+#   xb = c %*% beta
+#   hr = exp(xb)
+#   
+#   if (!all.equal(names(c),colnames(cov))) {
+#     stop("Mismatched names bw beta and var-cov matrix")
+#   }
+#   
+#   # compute the 95% CI
+#   se = sqrt(t(c) %*% cov %*% c)
+#   lowCI = exp(xb - qnorm(1-alpha/2)*se)
+#   highCI = exp(xb + qnorm(1-alpha/2)*se)
+#   p = pnorm(abs(xb/se),lower.tail=F)*2
+#   return(data.frame(hr,lowCI,highCI,p))
+# }
+```
 
 
-# Plot AUC values with confidence intervals
-ggplot(results, aes(x = Date, y = AUC, ymin = CI_Lower, ymax = CI_Upper, color = Predictor)) +
-  geom_point() +
-  geom_line() +
-  geom_errorbar(alpha = 0.3) +
-  labs(title = "AUC Comparison 2023",
-       x = "Date",
-       y = "AUC Value") +
-  theme_minimal() +
-  scale_y_continuous(limits = c(0,1)) + 
-  scale_x_continuous(breaks = as.numeric(dates), 
-                     labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023", 
-                                "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023")) # Adjust x-axis formatting as needed
+```{r}
+# library(dplyr)
+# library(splines)
+# library(tidyr)
+# library(ggplot2)
+# library(rms)
+# library(survey) # for svydesign and svyCreateTableOne
+# library(tableone)
+# library(sandwich)
+# library(ggplot2)
+# library(dplyr)
+# 
+# # Summary with robust CIs
+# mortality_model_sweights_VCOV = vcovCL(mortality_model_sweights_lvad_time_lvad_time, cluster = ~ PX_ID)
+# mortality_model_sweights_lvad_sum = do.call(rbind.data.frame, lapply(names(coef(mortality_model_sweights_lvad_time_lvad_time)), function(var_interest) {
+#   bind_cols(var = var_interest, getHR(mortality_model_sweights_lvad_time_lvad_time, vars = var_interest, cov = mortality_model_sweights_VCOV))
+# }))
+# 
+# # Filter out intercept
+# plotdat = mortality_model_sweights_lvad_sum %>%
+#   filter(var != "(Intercept)") %>%
+#   mutate(model = "Stabilized Weights + LVAD Time")
+# 
+# plotdat = plotdat %>% filter(!grepl("rcs", var))
+# # Hazard Ratio Forest Plot
+# ggplot(plotdat, aes(x = hr, y = var)) +
+#   geom_point(position = position_dodge(width = 0.5)) +
+#   geom_errorbarh(aes(xmin = lowCI, xmax = highCI), height = 0.2, position = position_dodge(width = 0.5)) +
+#   labs(x = "Hazard Ratio (95% CI)", y = "Term", title = "Model Hazard Ratios") +
+#   geom_vline(xintercept = 1, linetype = "dashed") 
+# 
+# # Save plot
+# ggsave("stabilized_weights_lvad_time_HR.png", height = 7, width = 16)
+# plotdat
+```
+```{r}
+# library(dplyr)
+# library(ggplot2)
+# library(splines) # for cubic splines
+# library(sandwich) # for robust standard errors
+# library(lmtest) # for coefficient testing
+# 
+# # Step 1: Define Reference Value for LVAD Years
+# ref_lvad_years <- 0 # Baseline category (e.g., 0 years)
+# lvad_years_values <- c(0, 1, 2, 5)  # Define key points for estimation
+# 
+# # Step 2: Create a Data Frame for Prediction
+# newdata <- expand.grid(
+#   albumin_at_start = median(combined_df$albumin_at_start, na.rm = TRUE),
+#   bilirubin_at_start = median(combined_df$bilirubin_at_start, na.rm = TRUE),
+#   eGFR_at_start = median(combined_df$eGFR_at_start, na.rm = TRUE),
+#   BNP_at_start = median(combined_df$BNP_at_start, na.rm = TRUE),
+#   BNP_NT_Pro_at_start = median(combined_df$BNP_NT_Pro_at_start, na.rm = TRUE),
+#   sodium_at_start = median(combined_df$sodium_at_start, na.rm = TRUE),
+#   durable_LVAD_at_start = median(combined_df$durable_LVAD_at_start, na.rm = TRUE),
+#   short_mcs_ever_at_start = median(combined_df$short_mcs_ever_at_start, na.rm = TRUE),
+#   cpo_at_start = median(combined_df$cpo_at_start, na.rm = TRUE),
+#   api_at_start = median(combined_df$api_at_start, na.rm = TRUE),
+#   papi_at_start = median(combined_df$papi_at_start, na.rm = TRUE),
+#   lvad_years_at_start = lvad_years_values # Vary only this variable
+# )
+# 
+# # Step 3: Predict HRs from Model
+# predictions <- predict(mortality_model_sweights_lvad_time_lvad_time, newdata, type = "link", se.fit = TRUE)
+# 
+# # Step 4: Convert to Hazard Ratios
+# newdata <- newdata %>%
+#   mutate(
+#     log_hr = predictions$fit,
+#     hr = exp(log_hr),
+#     lowCI = exp(log_hr - 1.96 * predictions$se.fit),
+#     highCI = exp(log_hr + 1.96 * predictions$se.fit)
+#   )
+# 
+# # Step 5: Normalize Against Reference (LVAD Years = 0)
+# ref_hr <- newdata %>% filter(lvad_years_at_start == ref_lvad_years) %>% pull(hr)
+# newdata <- newdata %>%
+#   mutate(
+#     norm_hr = hr / ref_hr,
+#     norm_lowCI = lowCI / ref_hr,
+#     norm_highCI = highCI / ref_hr
+#   )
+# 
+# newdata = newdata %>% filter(lvad_years_at_start != 0)
+# # Step 6: Plot the Forest Plot
+# ggplot(newdata, aes(x = norm_hr, y = as.factor(lvad_years_at_start))) +
+#   geom_point(position = position_dodge(width = 0.5)) +
+#   geom_errorbarh(aes(xmin = norm_lowCI, xmax = norm_highCI), height = 0.2, position = position_dodge(width = 0.5)) +
+#   labs(x = "Hazard Ratio (95% CI)", y = "LVAD Years", title = "Hazard Ratio for LVAD Years") +
+#   geom_vline(xintercept=1, linetype="dashed") 
+# 
+# 
+
+```
+```{r}
+# newdata
+# newdata = newdata %>% select(lvad_years_at_start, norm_hr, norm_lowCI, norm_highCI) %>%
+#   rename(hr = norm_hr, lowCI = norm_lowCI, highCI = norm_highCI, var = lvad_years_at_start)
+# newdata = newdata %>% mutate(
+#     var = as.character(var)
+#   )
+# plotdat = plotdat %>% select(var, hr, lowCI, highCI)
+# forest_data = bind_rows(newdata, plotdat) %>% mutate(
+#   var = case_when(
+#     var == "1" ~ "LVAD Years = 1 [v. 0]",
+#     var == "2" ~ "LVAD Years = 2 [v. 0]",
+#     var == "5" ~ "LVAD Years = 5 [v. 0]",
+#     var == "albumin_at_start" ~ "Albumin",
+#     var == "log(bilirubin_at_start + 1)" ~ "Log Bilirubin",
+#     var == "eGFR_at_start" ~ "eGFR",
+#     var == "sodium_at_start" ~ "Sodium",
+#     var == "durable_LVAD_at_start" ~ "Durable LVAD",
+#     var == "short_mcs_ever_at_start" ~ "Short-term MCS",
+#     var == "cpo_at_start" ~ "CPO",
+#     var == "api_at_start" ~ "API",
+#     var == "papi_at_start" ~ "PAPI",
+#     var == "log(BNP_at_start + 1):BNP_NT_Pro_at_start0" ~ "Log BNP, Regular BNP",
+#     var == "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" ~ "Log BNP, NT-Pro BNP"
+#   )
+# )
+# 
+# forest_data
+```
+```{r}
+# 
+# ggplot(forest_data, aes(x = hr, y = var)) +
+#   geom_point(position = position_dodge(width = 0.5), size = 2) +
+#   geom_errorbarh(aes(xmin = lowCI, xmax = highCI), height = 0.3, position = position_dodge(width = 0.5)) +
+#   labs(x = "Hazard Ratio (95% CI)", y = "Term", title = "Model Hazard Ratios") +
+#   geom_vline(xintercept = 1, linetype = "dashed")  +
+#   theme_minimal() +  # Clean theme
+#   theme(
+#     plot.title = element_text(size = 18),  # Title larger & bold
+#     axis.title.x = element_text(size = 16),  # X-axis label
+#     axis.title.y = element_text(size = 16),  # Y-axis label
+#     axis.text.x = element_text(size = 14),  # X-axis tick labels
+#     axis.text.y = element_text(size = 14)# Legend title size
+#   )
+# 
+# ggsave("uscrs_forest_ro1.png", width = 12, height = 7)
 ```
 
