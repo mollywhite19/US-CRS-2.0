@@ -47,6 +47,7 @@ test_data = test_data %>%group_by(PX_ID) %>% mutate(
   last_wait_date = pmax(last_active_date, last_inactive_date, na.rm = T)
 ) 
 
+table(test_data$status)
 ```
 
 
@@ -107,7 +108,7 @@ test_data = test_data %>%
   ungroup() %>%
   mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
          interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop),
-         status = ifelse(dup>0 & delisting == 1, "off_waitlist", status))
+         status = if_else(dup>0 & delisting == 1, "off_waitlist", status))
 
 
 ```
@@ -180,9 +181,9 @@ test_data = test_data %>%
 test_data = test_data %>% 
   mutate(
     follow_up_int = case_when(
-      time == time_to_transplant ~ floor(time/7) - 1,
-      time == time_to_death ~ floor(time/7),
-      time == time_to_removal_deteriorate ~ floor(time/7),
+      time == time_to_transplant ~ floor(time/7),
+      time == time_to_death ~ ceiling(time/7),
+      time == time_to_removal_deteriorate ~ ceiling(time/7),
       TRUE ~ 6
     ),
     outcome = case_when(
@@ -194,7 +195,7 @@ test_data = test_data %>%
   )
 
 #filter out inactives and post delisting dates
-test_data_actives = test_data %>% filter(!(status %in% c("inactive", "off_waitlist")))
+test_data_actives = test_data %>% filter(!(status %in% c("inactive", "off_waitlist")) & !is.na(status))
 
 
 ```
@@ -211,42 +212,42 @@ test_data_actives = test_data %>% filter(!(status %in% c("inactive", "off_waitli
 # Subset data at certain calendar dates
 # Calculate wait time at specific calendar date
 first_int = test_data_actives %>% 
-  filter(current_date <= "2023-01-01" & current_date > "2022-12-24") %>% 
+  filter(current_date <= "2023-01-01" & current_date > "2022-12-25") %>% 
   mutate(int = 1,
          wait_time = wait_time + as.numeric(as.Date("2023-01-01") - current_date)) 
 
 second_int = test_data_actives %>% 
-  filter(current_date <= "2023-02-15" & current_date > "2023-02-08") %>% 
+  filter(current_date <= "2023-02-15" & current_date > "2023-02-09") %>% 
   mutate(int = 2,
          wait_time = wait_time + as.numeric(as.Date("2023-02-15") - current_date))  
 
 third_int = test_data_actives %>% 
-  filter(current_date <= "2023-04-01" & current_date > "2023-03-25") %>% 
+  filter(current_date <= "2023-04-01" & current_date > "2023-03-26") %>% 
   mutate(int = 3,
          wait_time = wait_time + as.numeric(as.Date("2023-04-01") - current_date)) 
 
 fourth_int = test_data_actives %>% 
-  filter(current_date <= "2023-05-15" & current_date > "2023-05-08") %>% 
+  filter(current_date <= "2023-05-15" & current_date > "2023-05-09") %>% 
   mutate(int = 4,
          wait_time = wait_time + as.numeric(as.Date("2023-05-15") - current_date)) 
 
 fifth_int = test_data_actives %>% 
-  filter(current_date <= "2023-07-01" & current_date > "2023-06-24") %>% 
+  filter(current_date <= "2023-07-01" & current_date > "2023-06-25") %>% 
   mutate(int = 5,
          wait_time = wait_time + as.numeric(as.Date("2023-07-01") - current_date)) 
 
 sixth_int = test_data_actives %>% 
-  filter(current_date <= "2023-08-15" & current_date > "2023-08-08") %>% 
+  filter(current_date <= "2023-08-15" & current_date > "2023-08-09") %>% 
   mutate(int = 6,
          wait_time = wait_time + as.numeric(as.Date("2023-08-15") - current_date)) 
 
 seventh_int = test_data_actives %>% 
-  filter(current_date <= "2023-10-01" & current_date > "2023-09-24") %>% 
+  filter(current_date <= "2023-10-01" & current_date > "2023-09-25") %>% 
   mutate(int = 7,
          wait_time = wait_time + as.numeric(as.Date("2023-10-01") - current_date))  
 
 eighth_int = test_data_actives %>% 
-  filter(current_date <= "2023-11-15" & current_date > "2023-11-08") %>% 
+  filter(current_date <= "2023-11-15" & current_date > "2023-11-09") %>% 
   mutate(int = 8,
          wait_time = wait_time + as.numeric(as.Date("2023-11-15") - current_date)) 
 
@@ -304,6 +305,7 @@ eighth_int = eighth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>%
 #Higher for higher waiting time, flip for AUC calculations if necessary
 first_int %>% filter(status == 4) %>% arrange(desc(wait_time)) %>% select(PX_ID, status, wait_time, rank)
 
+first_int %>% arrange(status) %>% select(status,rank, wait_time)
 ```
 
 
@@ -352,80 +354,141 @@ second_int
 # Flip the predictors to be higher when the candidate is higher risk of death
 # Keep out for now since we are using predicted probability of survival in AUC
 
-# first_int = first_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# second_int = second_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# third_int = third_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# fourth_int = fourth_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# fifth_int = fifth_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# sixth_int = sixth_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# seventh_int = seventh_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
-# eighth_int = eighth_int %>% 
-#   ungroup() %>% mutate(
-#   rank = 1/rank,
-#   prob_surv_6wk = 1 - prob_surv_6wk,
-#   uscrs_score = cut_number(prob_surv_6wk, 50, labels= FALSE),
-#   follow_up_int= ifelse(outcome==0,follow_up_int+0.001,follow_up_int)
-# )
+first_int = first_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+second_int = second_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+third_int = third_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+fourth_int = fourth_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+fifth_int = fifth_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+sixth_int = sixth_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+seventh_int = seventh_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
+eighth_int = eighth_int %>%
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  prob_outcome_6wk = 1 - prob_surv_6wk,
+  status_flipped = 1/as.numeric(status)
+)
 
-
-methods(predictRisk)
+#full data for pooled roc
+eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
 ```
 
 
 ```{r}
+# pooled roc
 auc6wk <- Score(
-  list("uscrs" = pred_surv_6wk, "status" = rank),
-  formula = Hist(follow_up_int, outcome) ~ ns(albumin,df=3) + ns(bilirubin,df=3) + ns(eGFR,df=3) + ns(sodium,df=3) + ns(BNP,df=3)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
-  data = first_int %>% mutate(follow_up_int = ifelse(outcome==0,follow_up_int+0.001,follow_up_int)),
+  list("uscrs" = eight_sets$prob_outcome_6wk, "waiting time + status" = eight_sets$rank, "status only" = eight_sets$status_flipped),
+  formula = Hist(follow_up_int, outcome) ~ albumin + log(bilirubin+1) + eGFR + sodium + log(BNP+1)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
+  data = eight_sets %>% mutate(follow_up_int = ifelse(outcome==0,follow_up_int+0.001,follow_up_int)),
   cens.method = "ipcw", cens.model = "cox",
   conf.int = TRUE,
   times = 6,
   metrics = c("auc"),
-  conservative = T
+  conservative = T,
+  plots = "roc"
 )
 
+df = auc6wk$ROC$plotframe
+#only status dataframe
+df_status = df %>% filter(model == "status only")
+
+# Plot the ROC curve
+ggplot(df, aes(x = FPR, y = TPR, color = model)) +
+  geom_line() +
+  labs(title = "ROC Curve", x = "False Positive Rate (FPR)", y = "True Positive Rate (TPR)") +
+  theme_minimal() + 
+  ylim(c(0,1))
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+```{r}
+#datasets for looping
+datasets <- list(first_int, second_int, third_int, fourth_int, 
+                 fifth_int, sixth_int, seventh_int, eighth_int)
+
+auc_results <- list()
+
+# Loop through datasets to compute AUC
+for (i in 1:length(datasets)) {
+  auc_results[[i]] <- Score(
+    list("uscrs" = datasets[[i]]$prob_outcome_6wk, "status" = datasets[[i]]$rank),
+    formula = Hist(follow_up_int, outcome) ~ albumin + log(bilirubin + 1) + 
+              eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+              durable_LVAD + short_MCS_ever + status,
+    data = datasets[[i]] %>% 
+              mutate(follow_up_int = ifelse(outcome == 0, follow_up_int + 0.001, follow_up_int)),
+    cens.method = "ipcw", cens.model = "cox",
+    conf.int = TRUE,
+    times = 6,
+    metrics = c("auc"),
+    conservative = TRUE
+  )$AUC$score %>%
+    mutate(dataset = paste0("Dataset_", i))  # Add dataset identifier
+}
+
+auc_df <- bind_rows(auc_results)
+
+
+dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
+                           "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
+auc_df$Date <- rep(dates, each = 2)
+ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = model)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(alpha = 0.3) +
+  labs(title = "AUC Comparison 2023",
+       x = "Date",
+       y = "AUC Value") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0,1)) +
+  scale_x_continuous(breaks = as.numeric(dates),
+                     labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023",
+                                "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023"))
 ```
 
 
