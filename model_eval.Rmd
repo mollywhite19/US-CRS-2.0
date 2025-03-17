@@ -8,6 +8,9 @@ date: "2024-07-15"
 #rm(list = ls())
 load("C:/Users/mhwhi/Downloads/mortality-model.RData")
 load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
+# Grace
+# base::load("mortality-model.RData")
+# base::load("mortality_model_test_data.RData")
 library(rms)
 library(tidyr)
 library(dplyr)
@@ -25,7 +28,8 @@ library(splines)
 
 
 ```{r}
-#create week varianble
+#create week variable
+#not using this rn - change to row_number() if we use?
 test_data = test_data %>% 
   mutate(
   week = interval_start / 7 + 1
@@ -453,6 +457,24 @@ datasets <- list(first_int, second_int, third_int, fourth_int,
 
 auc_results <- list()
 
+# # look at p-value for comparisons
+# for (i in 1:length(datasets)) {
+#   auc_results[[i]] <- Score(
+#     list("uscrs" = datasets[[i]]$prob_outcome_6wk, "status" = datasets[[i]]$rank),
+#     formula = Hist(follow_up_int, outcome) ~ albumin + log(bilirubin + 1) + 
+#               eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+#               durable_LVAD + short_MCS_ever + status,
+#     data = datasets[[i]] %>% 
+#               mutate(follow_up_int = ifelse(outcome == 0, follow_up_int + 0.001, follow_up_int)),
+#     cens.method = "ipcw", cens.model = "cox",
+#     conf.int = TRUE,
+#     times = 6,
+#     metrics = c("auc"),
+#     conservative = TRUE
+#   )$AUC$contrasts[,"p"]
+# }
+# auc_results
+
 # Loop through datasets to compute AUC
 for (i in 1:length(datasets)) {
   auc_results[[i]] <- Score(
@@ -472,34 +494,34 @@ for (i in 1:length(datasets)) {
 }
 
 auc_df <- bind_rows(auc_results)
-auc_df$Model = ifelse(auc_df$model == "uscrs", "US-CRS", "Status Quo")
+auc_df$Model = ifelse(auc_df$model == "uscrs", "US-CRS 2.0", "Status Quo")
 
 dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
                            "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
 auc_df$Date <- rep(dates, each = 2)
 
 
-ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model)) +
-  geom_point() +
-  geom_line() +
-  geom_errorbar(alpha = 0.3) +
+ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, linetype = Model)) +
+  geom_point(position = position_dodge(width = 24)) +
+  geom_line(position = position_dodge(width = 24)) +
+  geom_errorbar(position = position_dodge(width = 24),width=15) +
   labs(
-    title = "AUC Comparison 2023",
-    x = "Date",
-    y = "AUC Value"
+    title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
+    x = "Start date for cross-section",
+    y = "AUC (6-week mortality)"
   ) +
-  theme_minimal() +
+  theme_bw() +
   theme(
     panel.background = element_rect(fill = "white", color = "white"),
     plot.background = element_rect(fill = "white", color = NA), 
     
     # Increase font sizes
-    plot.title = element_text(size = 18),
-    axis.title.x = element_text(size = 16), 
-    axis.title.y = element_text(size = 16),
-    axis.text = element_text(size = 14),
-    legend.title = element_text(size = 16),
-    legend.text = element_text(size = 14), 
+    # plot.title = element_text(size = 18),
+    # axis.title.x = element_text(size = 16), 
+    # axis.title.y = element_text(size = 16),
+    axis.text = element_text(size = 10),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
     axis.text.x = element_text(angle = 45, hjust = 1)
   ) +
   scale_y_continuous(limits = c(0,1)) +
@@ -507,10 +529,12 @@ ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model)
     breaks = as.numeric(dates),
     labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023",
                "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023")
-  )
+  ) +
+  scale_color_manual(values = c("orange","darkblue")) +
+  scale_linetype_manual(values = c("dashed","solid"))
 
 
-ggsave("uscrs_auc_comparison.png", width = 10, height = 7)
+ggsave("uscrs_auc_comparison.png", width = 6, height = 4, dpi = 300)
 
 ```
 
