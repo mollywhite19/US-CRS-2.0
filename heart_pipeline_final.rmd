@@ -138,8 +138,7 @@ risk_strat_data_hr = risk_strat_data_hr %>%
   select(-ChangeDate) %>% 
   full_join(just_form_hr_data_link %>%
               select(-ChangeDate, -InitialFormJustId), by = "WlregAuditId") %>% 
-  mutate(PX_ID = px_id) %>% 
-  select(-px_id) %>%
+  rename(PX_ID = px_id) %>% 
   
   # removes entries that have valid WlregAuditId but missing JustId
   filter(!is.na(JustId)) %>%
@@ -166,46 +165,22 @@ head(tmp)
 # form is submitted before it goes into effect, so ChangeDt always before BeginDate
 with(tmp,summary(as.numeric(ChangeDt-BeginDate,units="days")))
 
-# right_join to filter out erroneous forms, as above
+# right_join to filter out erroneous forms from data link, as above
 just_form_hr_data_link = just_form_hr_data_link %>%
   select(-ChangeDate) %>% 
   right_join(risk_strat_data_hr %>% 
               select(ChangeDt, JustId, PX_ID), by = "JustId")
 
-# right_join to filter out erroneous forms, as above
+# right_join to filter out erroneous forms from just_form_hr, as above
 just_form_hr = just_form_hr %>% 
   select(JustId, RequestedCandStatCd, RequestedCandStat_descrip,
          ExtensionNumber, Exception, ThorSupportDevicePrimary,
          ThorSupportDeviceSecondary, descrip, AdmittedToHospital, FormEffectiveDt) %>%
-  mutate(listing_description = descrip) %>% 
-  select(-descrip) %>% 
+  rename(listing_description = descrip) %>% 
   right_join(just_form_hr_data_link %>% 
               select(-WlregAuditId, -InitialFormJustId), by = "JustId")
 
-  # status_just_episode provides same info as stathist_thor, so not including it
-  # # join status episode information by JustId
-  # full_join(status_just_episode %>% select(JustId:EndDate), by = "JustId")
-
-# thor_support_device seems to include many duplicates, include at your own risk
-thor_support_device = thor_support_device %>%
-
-
-  # join device information by DeviceId
-  left_join(just_form_hr %>% select(ThorSupportDevicePrimary, PX_ID),
-            by = c("DeviceId" = "ThorSupportDevicePrimary")) %>%
-  select(-DeviceId) %>%
-  distinct(.keep_all = TRUE)
-
-thor_support_device
-#   
-#   # can pipe in this code to include secondary VAD info from thor_support_device
-#   # left_join(just_form_hr %>% select(ThorSupportDeviceSecondary, PX_ID),
-#   #           by = c("DeviceId" = "ThorSupportDeviceSecondary"),
-#   #           suffix = c(".primary", ".secondary"))
-
-just_form_hr = just_form_hr %>% 
-  select(-ThorSupportDevicePrimary, -ThorSupportDeviceSecondary)
-
+# left_join data link to status datasets
 just_form_hr_stat1 = just_form_hr_stat1 %>%
   select(-ChangeDate) %>% 
   left_join(just_form_hr_data_link %>% 
@@ -227,10 +202,7 @@ just_form_hr_stat4 = just_form_hr_stat4 %>%
               select(JustId, PX_ID, ChangeDt), by = "JustId")
 
 
-
-thor_support_device = thor_support_device %>% mutate(
-  ChangeDt = as.Date(ChangeDate)
-)
+## get LVADs
 
 lvad_keywords = c("heartmate", "hm", "lionheart", "arrow", "jarvik", "micromed", "debakey", "novacor", "evaheart", "worldheart", "levacor", "reliantheart")
 
@@ -239,25 +211,23 @@ lvad_keywords = c("heartmate", "hm", "lionheart", "arrow", "jarvik", "micromed",
 # devices with "unknown" code but qualifying status 4 by LVAD on that date
 # "unknown" device codes with the name of a durable LVAD in their description
 
-lvads = thor_support_device %>% left_join(just_form_hr_stat4, by = c("PX_ID", "ChangeDt")) %>% filter(VadBrandId %in% c('202', '205', '206', '207', '208', '209', '210', 
+lvads = thor_support_device %>% 
+  
+  right_join(just_form_hr %>% select(ThorSupportDevicePrimary, JustId),
+            by = c("DeviceId" = "ThorSupportDevicePrimary")) %>%
+  left_join(just_form_hr_stat4, by = c("JustId")) %>% 
+  filter(VadBrandId %in% c('202', '205', '206', '207', '208', '209', '210', 
                         '212', '213', '214', '223', '224', '233', '236', 
                         '239', '240', '312', '313', '314', '315', '316', '319', '322', 
                         '327', '330', '333', '334') | (VadBrandId == 999 & CriteriaLvadSupport == 1) | (VadBrandId == 999 & grepl(paste(lvad_keywords, collapse = "|"), OtherSpecify, ignore.case = TRUE)))
-
-lvads = lvads %>% group_by(PX_ID) %>% mutate(
-  durable_lvad_implant_dt = first(ImplantDt)
-) %>% select(PX_ID, durable_lvad_implant_dt) %>% distinct()
-
-# just_form_hr_stat4 %>% filter(PX_ID == 1131758)
-# lvads %>% filter(PX_ID == 1131758)
+# table(lvads$VadBrandId,useNA="ifany")
 # 
-# df %>% filter(PX_ID == 1131758) %>% select(unique_date, status, status_criteria, CriteriaLvadSupport)
+#   205   209   223   224   233   236   999 
+#  7267    25    79 11949    20 25958   106 
 
-px_ids = (just_form_hr %>% filter(ChangeDt < "2018-10-18"))$PX_ID
-px_ids_1a = (stat_just_hr1a %>% filter(PX_ID %in% px_ids))$PX_ID
-
-just_form_hr_stat4 %>% filter(PX_ID == 729036)
-cand_thor %>% filter(PX_ID == 1292886)
+lvads_earliest = lvads %>% group_by(PX_ID) %>% mutate(
+  durable_lvad_implant_dt = min(ImplantDt,na.rm=T)
+) %>% select(PX_ID, durable_lvad_implant_dt) %>% distinct()
 ```
 
 # Tidy input datasets
@@ -1498,7 +1468,7 @@ df %>% select(PX_ID, CAN_VAD1, CAN_VAD2, CAN_VAD_TY)
 ```
 
 ```{r}
-df = df %>% left_join(lvads, by = "PX_ID")
+df = df %>% left_join(lvads_earliest, by = "PX_ID")
 
 ```
 
