@@ -6,6 +6,8 @@ date: "2024-05-09"
 
 # Setup
 
+This code pulls in all of the SRTR SAFs needed to create a time-varying dataset of adult heart candidates who were alive and waiting during the calendar period defined by `filter_date_start` and `filter_date_end`. The result is a time-varying dataset that includes rows prior to this calendar period.
+
 ```{r setup, include=FALSE}
 rm(list=ls())
 library(knitr)
@@ -244,6 +246,8 @@ include_multi_organ_recipients = TRUE
 
 # See code chunk #7 if using pre-policy data
 include_pre_policy = FALSE
+
+# remove variables that are 100% missing
 missingness_threshold = 1
 
 
@@ -315,11 +319,6 @@ rm(cand_thor, tx_hr, risk_strat_data_hr, stathist_thor, just_form_hr,
    status_just_episode, just_form_hr_data_link)
 
 gc()
-
-stathist %>% filter(PX_ID == 729036)
-just_form %>% filter(PX_ID == 729036)
-
-cand_list %>% filter(PX_ID == 1343464)
 ```
 
 # Pivot cand_list and stathist by date, then full_join to create full_list
@@ -344,7 +343,7 @@ cand_list = cand_list %>%
     REC_TX_DT, CAN_LAST_ACT_STAT_DT, CAN_LAST_INACT_STAT_DT,
     CAN_VAD2, CAN_REM_CD)
 
-
+# remove variables with too much missingness
 cand_list_missing_data_check = tibble(
   pct_missing = vector(mode = "double", length = ncol(cand_list)),
   var_names = colnames(cand_list))
@@ -362,6 +361,7 @@ cand_list_missing_data_check = cand_list_missing_data_check %>%
 # this line removes variables which do not meet missingness criteria
 cand_list = cand_list %>% select(-cand_list_missing_data_check$var_names)
 
+# create unique_event and unique_date variables
 cand_list = cand_list %>%
   distinct(.keep_all = TRUE) %>% 
   pivot_longer(cols = ends_with("DT"),
@@ -398,6 +398,7 @@ stathist = stathist %>%
   select(PX_ID, unique_event, unique_date, CANHX_STAT_CD, 
          CANHX_REASON_STAT_INACT)
 
+# combine cand and stathist
 full_list = cand_list %>% 
   
   # full join by common variables, thus no need for suffix
@@ -416,13 +417,10 @@ full_list = cand_list %>%
   # arranges dataset for easy viewing
   arrange(PX_ID, unique_date) %>% 
   ungroup()
-  
-full_list %>% filter(PX_ID == 729036)
 
-stathist
 ```
 
-# Pivot tx_list by date, then join with full_list
+# Pivot tx data by date, then join with full_list
 
 ```{r pivot tx_list}
 
@@ -445,6 +443,8 @@ tx_list = tx_list %>%
          TFL_LASTATUS, TFL_GRAFT_DT, TFL_DEATH_DT,
          PERS_RETX, TFL_LAFUDATE, REC_MM_EQUIV_TX)
 
+# remove variables with too much missingness
+
 tx_list_missing_data_check = tibble(
   pct_missing = vector(mode = "double", length = ncol(tx_list)),
   var_names = colnames(tx_list))
@@ -462,10 +462,9 @@ tx_list_missing_data_check = tx_list_missing_data_check %>%
 # this line removes variables which do not meet missingness criteria
 tx_list = tx_list %>% select(-tx_list_missing_data_check$var_names)
 
-
+# pivot by date, as above
 tx_list = tx_list %>% 
-  mutate(TFL_LAST_FU_DT = TFL_LAFUDATE) %>%
-  select(-TFL_LAFUDATE) %>% 
+  rename(TFL_LAST_FU_DT = TFL_LAFUDATE) %>%
   pivot_longer(cols = ends_with("DT"),
                names_to = "event", 
                values_to = "date", 
@@ -480,6 +479,7 @@ tx_list = tx_list %>%
   ungroup() %>% 
   select(PX_ID, unique_event, unique_date, ORG_TY:REC_MM_EQUIV_TX)
 
+# join with full_list
 full_list = full_list %>% 
   
   # full join by common variables, thus no need for suffix
@@ -488,9 +488,6 @@ full_list = full_list %>%
   # arranges dataset for easy viewing
   arrange(PX_ID, unique_date) %>% 
   ungroup()
-
-full_list %>% filter(PX_ID == 1215709)
-
 ```
 
 # Join just_form and just_stat1-just_stat4 with risk_strat, 
@@ -707,11 +704,7 @@ risk_strat = risk_strat %>%
 
   arrange(PX_ID, unique_date)
 
-risk_strat %>% filter(PX_ID == 1387071) %>% select(starts_with("Criteria"))
-
 gc()
-
-risk_strat %>% select(ends_with("Dt"))
 
 ```
 
@@ -727,7 +720,7 @@ just_form_indicator_variables = c(
          "CriteriaEcmoSupport", "EcmoWithHemo",
          "CardiacIndexInotropeSupport", "EcmoWithoutHemo", "ExtDemoContra.stat1",
          "CriteriaBivadSupport", "CriteriaMcsdSupport.stat1", "VentricularEpisode",
-         "BivadPlacement", "CriteriaLvadSupport", 
+         "BivadPlacement", 
 
          # just_stat2 variables
          "CriteriaLvadSupport.stat2", "CriteriaDurableDevSupport",
@@ -761,7 +754,7 @@ just_form_indicator_variables = c(
          "ExtMcsdMilrinone", "ExtMcsdNitricOxide", "ExtMcsdProstacyclin",
 
          # just_stat4 variables
-         "CriteriaLvadSupport.stat4", "CriteriaInotropeSupport.stat4",
+         "CriteriaLvadSupport", "CriteriaInotropeSupport.stat4",
          "CriteriaHeartDisease", "HeartDiseaseValues", "HeartDiseaseOther",
          "CriteriaIschemicHeart", "CriteriaCardiomyopathy", "CardioHypertrophic",
          "CardioAmyloidosis", "CardioRestrict", "CardiomyopathyCanadian",
@@ -769,7 +762,8 @@ just_form_indicator_variables = c(
          "CardiomyopathyVenTachy", "CardiomyopathyVenFib", "CardiomyopathyVenArr",
          "CardiomyopathySuddenDeath", "CriteriaRetransplant", "ExtInotropeDobutamine",
          "ExtInotropeMilrinone", "ExtInotropeEpinephrine", "ExtInotropeDopamine")
-  
+
+# select certain variables for risk_strat
 risk_strat = risk_strat %>%   
   select(PX_ID, JustId, unique_date, unique_event,
          
@@ -790,8 +784,7 @@ risk_strat = risk_strat %>%
          # indicator variables from just_stat1-just_stat4
          any_of(just_form_indicator_variables))
 
-risk_strat %>% filter(PX_ID == 729036)
-         
+# pivot longer
 risk_strat = risk_strat %>%
   
   pivot_longer(cols = -c(PX_ID, JustId, unique_date, unique_event,
@@ -809,6 +802,9 @@ risk_strat = risk_strat %>%
 
   distinct(across(c(PX_ID, unique_date, variable, value)), .keep_all = TRUE) %>% 
   arrange(PX_ID, JustId, unique_date)
+
+
+# when there are two distinct justification forms that have an equivalent date for a specific variable, this code updates the date of the latter form to be equivalent to the ChangeDate. So for example, if a patient has two heart rate measurements on the same date for different JustIds, the JustId that was created later updates the date of the heart rate measurement on that justification form to be equivalent to the ChangeDate for that form.
 
 duplicated_JustId = risk_strat %>% 
   group_by(PX_ID, unique_date, variable) %>% 
@@ -838,7 +834,7 @@ merged_JustId = later_JustId %>%
             suffix = c("", ".replaced"))
 
 risk_strat = risk_strat %>% 
-  left_join(merged_JustId, 
+  left_join(merged_JustId %>% distinct, 
             by = c("PX_ID", "JustId", "variable", "unique_date")) %>% 
   mutate(unique_date = case_when(
     !is.na(unique_date.replaced) ~ unique_date.replaced,
@@ -850,11 +846,14 @@ risk_strat = risk_strat %>%
   select(-unique_date.replaced) %>% 
   distinct(across(c(PX_ID, unique_date, variable)), .keep_all = TRUE)
 
-
-
 rm(duplicated_JustId, earlier_JustId, later_JustId, later_ChangeDt, merged_JustId)
 
+
+# pivot wider
 risk_strat = risk_strat %>% 
+  # remove this variable so that results are unique by px_id, justid, unique_date, unique_event
+  select(-date_changed) %>%
+  
   pivot_wider(names_from = variable,
               values_from = value) %>% 
  
@@ -870,6 +869,7 @@ risk_strat = risk_strat %>%
   mutate(RequestedCandStatCd = as.integer(RequestedCandStatCd))
 
 
+# create a column for which criteria was met at the reporting time
 risk_strat = risk_strat %>%
   
   pivot_longer(cols = c(starts_with("Criteria", ignore.case = FALSE), VentricularEpisode),
@@ -878,12 +878,14 @@ risk_strat = risk_strat %>%
                values_drop_na = FALSE) %>% 
   relocate(criteria, indicator, .after = unique_event) %>% 
   mutate(status_criteria = ifelse(indicator == 1, criteria, NA)) %>%
+  
   filter(is.na(indicator) | indicator == 1) %>%
   
   pivot_wider(names_from = criteria,
               values_from = indicator) %>% 
   
   relocate(status_criteria, .after = unique_event) %>% 
+  
   arrange(PX_ID, JustId, unique_date) %>%
   
   # # keep track of which status was requested by this JustId and by which criteria
@@ -895,9 +897,19 @@ risk_strat = risk_strat %>%
   group_by(PX_ID, JustId, unique_event, unique_date) %>%
   fill(status_criteria, .direction = "downup") %>%
   filter(row_number() == n()) %>% 
-  ungroup() %>% 
-  distinct(PX_ID, unique_event, unique_date, .keep_all = TRUE)
+  ungroup()
 
+# note: can have multiple rows for same date/event if different justification forms
+## AND these rows have different data
+## solution: share the data across both rows, then take the earlier
+risk_strat %>% group_by(PX_ID,unique_event,unique_date) %>% filter(n()>1)
+risk_strat = risk_strat %>%
+  group_by(PX_ID, unique_event, unique_date) %>%
+  fill(status_criteria:RequestedCandStatCd, .direction = "downup") %>%
+  slice(1) %>% 
+  ungroup()
+
+# join just form data with cand, stathist, and tx data
 full_list = full_list %>%
 
   # full join by common variables, thus no need for suffix
@@ -908,15 +920,6 @@ full_list = full_list %>%
   # arranges dataset for easy viewing
   arrange(PX_ID, unique_date) %>%
   ungroup()
-
-
-```
-```{r}
-risk_strat = risk_strat %>% mutate(
-  across(starts_with("Criteria"), ~ as.numeric(.))) %>%
-mutate(
-  across(starts_with("Criteria"), ~ 
-    ifelse(unique_event == "ChangeDt" & !is.na(.) & . == 1, 1, 0))) 
 
 
 ```
@@ -958,10 +961,6 @@ vars_to_remove = c("CANHX_HEMO_SBP", "CANHX_HEMO_PCWP", "CANHX_HEMO_MAP", "CANHX
 
 ```
 
-```{r}
-full_list %>% filter(PX_ID == 1215709)
-```
-
 
 ```{r}
 
@@ -980,7 +979,7 @@ full_list = full_list %>%
            .after = unique_date) %>% 
   
   relocate(dobutamine_dose, milrinone_dose, dopamine_dose, epinephrine_dose,
-           date_changed,
+           #date_changed,
            .after = last_col()) %>% 
   
   # combines events if events happened on the same day
@@ -988,8 +987,8 @@ full_list = full_list %>%
   mutate(unique_event = str_c(unique_event, collapse = ",")) %>%
   
   # removes redundant rows after combining events above
-  group_by(PX_ID, unique_date) %>%
   fill(everything(), .direction = "downup") %>%
+  ungroup() %>%
   distinct(PX_ID, unique_date, unique_event, .keep_all = TRUE) %>%   
   
   # necessary for filling steps below
@@ -1018,15 +1017,6 @@ full_list = full_list %>%
 
   arrange(PX_ID, unique_date) %>%
 
-  # fill variables "down" to show change over time
-  # this fills in missing values using the na.locf() method
-  # must uncomment lines below if using pre-policy data
-  # group_by(PX_ID, RowNumber) %>%
-  # fill(CANHX_STAT_TY:CANHX_ECMO, .direction = "down") %>%
-  # ungroup() %>%
-  # 
-  # arrange(PX_ID, unique_date) %>%
-
   # fill variables "downup" by JustId group to fill all rows from that form
   # must uncomment line below if using pre-policy data
   group_by(PX_ID, JustId) %>% #, RowNumber) %>%
@@ -1047,8 +1037,6 @@ full_list = full_list %>%
 # take last time point if multiple updates in one day
 
 # comment out lines below to exclude those timepoints from the dataset
-# currently, dates are commented out except for listing, transplant, death, 
-# last follow-up, and status changes
 
 df = full_list %>% 
   
@@ -1169,7 +1157,6 @@ df = full_list %>%
       grepl("CANHX_PHYS_HEMO_DT", unique_event) |
       grepl("CANHX_PHYS_ECHO_DT", unique_event) |
       grepl("CANHX_MED_UPDATE_DT", unique_event))
-df %>% filter(PX_ID == 1215709)
   
 ```
 
@@ -1190,13 +1177,15 @@ table(df$CANHX_STAT_CD,useNA="ifany")
 
 ```{r calculate time steps}
 
-df = df %>% group_by(PX_ID) %>% 
+df = df %>% 
   arrange(PX_ID, unique_date) %>%
+  group_by(PX_ID) %>% 
   mutate(t_start = as.numeric(unique_date - first(unique_date), unit = "days"),
          t_stop = ifelse(row_number() == n(), t_start, lead(t_start)))
 
 
 df = df %>% 
+  ungroup() %>% 
   relocate(t_start, t_stop, .after = unique_date)
 
 
@@ -1204,6 +1193,7 @@ rdata_filename =  paste0("cont_time_series_", curr_data_release, ".RData")
 
 csv_filename =  paste0("cont_time_series_", curr_data_release, ".csv")
 
+save(df,file="cont_time_series_2403.Rdata")
 # save(df, file = here(curr_data_release, rdata_filename))
 # write_csv(df, file = here(curr_data_release, csv_filename))
 
@@ -1228,7 +1218,6 @@ csv_filename =  paste0("cont_time_series_", curr_data_release, ".csv")
 # Create time-related variables
 
 ```{r, warning=F, comment=NA, message=F}
-
 
 df = df %>% arrange(PX_ID, unique_date) %>%
   
@@ -1280,28 +1269,19 @@ df = df %>% arrange(PX_ID, unique_date) %>%
   mutate(removal_time = as.numeric(pmax(removal_date, last_active_date, last_inactive_date, na.rm = T) - 
                                      start_date, units='days'))
 
-# confirm these are constant across px_id
-df %>% group_by(PX_ID) %>% filter(n_distinct(transplant_time)!=1)
-df %>% group_by(PX_ID) %>% filter(n_distinct(death_time)!=1)
-df %>% group_by(PX_ID) %>% filter(n_distinct(removal_time)!=1)
+# # confirm these are constant across px_id
+# df %>% group_by(PX_ID) %>% filter(n_distinct(transplant_time)!=1)
+# df %>% group_by(PX_ID) %>% filter(n_distinct(death_time)!=1)
+# df %>% group_by(PX_ID) %>% filter(n_distinct(removal_time)!=1)
   
+# remove people who died before filter_date_start
 df = df %>% filter(is.na(death_date_max) | death_date_max >= filter_date_start)
-df %>% filter(PX_ID == 1215709)
-```
-
-```{r}
-summary_df = df %>% filter(grepl("CAN_LISTING_DT", unique_event)) %>% select(PX_ID, unique_date, removal_date, transplant_date, death_date_max) %>% rename(listing_date = unique_date, death_date = death_date_max)
-
-save(summary_df, file = "post_policy_summary.RData")
 ```
 
 # Add transplant indicator based on a REC_TX event
 ```{r, warning=F, comment=NA, message=F}
 df$transplant = 0
 df$transplant[which(grepl(pattern = 'REC_TX_DT', x = df$unique_event))] = 1
-
-df %>% select(PX_ID, t_start, t_stop, transplant)
-
 ```
 
 # Censor observations after transplant
@@ -1366,6 +1346,8 @@ paste0('Percent Transplanted: ',
        round(100 * (length(unique(df$PX_ID[df$transplant == 1])) / length(unique(df$PX_ID))), 2))
 
 ```
+
+# Create death indicator at t_stop
 ```{r, warning=F, comment=NA, message=F}
 
 
@@ -1384,34 +1366,25 @@ df %>% filter(transplant==1,t_start==t_stop) %>% select(PX_ID,unique_event,uniqu
 df %>% ungroup() %>% filter(grepl("CAN_REM_DT",unique_event),transplant==0,t_start==t_stop) %>%
   select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome)
 
-# these delistings are always the last row
+# note: these delistings are always the last row
 df %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start==t_stop & row_number()!=n())) %>% nrow()
 
 # what's going on with rows after delisting when there was no death?
-## note: these censoring times are just data byproducts, eg ChangeDt after removal
+## conclusion: just data byproducts, eg ChangeDt after removal
 df %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start!=t_stop & outcome!=1),t_start>=removal_time) %>%
-  select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
-
-# look at a few specific ids
-df %>% filter(PX_ID %in% c(1471218,1526025,1337428)) %>%
-  slice(n()-2,n()-1,n()) %>%
   select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
 
 # how many PX_IDs?
 dim(table(df$PX_ID))
-# 21100
 
 # how many transplants?
 table(df$transplant==1,useNA="ifany")
-# 15516
 
 # how many deaths? including some posttransplant deaths from OPTN
 df %>% filter(transplant<=1,outcome==1) %>% distinct(PX_ID) %>% nrow()
-# 3224
 
 # how many delistings?
 df %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow()
-# 2249
 
 ## WARNING - This is removing delistings w/o death dates (delisting=1, transplant=0, outcome=0) that we want to follow after removal 
 tmp1 = df %>% filter(transplant <= 1 & t_start != t_stop) %>% 
@@ -1423,10 +1396,10 @@ tmp2 = df %>% filter(transplant <= 1 &
                          (t_start==t_stop & grepl("CAN_REM_DT",unique_event) & transplant==0 & outcome==0) |
                          (t_start!=t_stop) |
                          n() == 1))
-dim(table(tmp2$PX_ID)) # 21100
-table(tmp2$transplant) # 15516
-table(tmp2$outcome) # 3241 - too many
-tmp2 %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow() # 2249
+dim(table(tmp2$PX_ID))
+table(tmp2$transplant)
+table(tmp2$outcome) # too many
+tmp2 %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow()
 
 # problem: a person can have multiple deaths, if death was on same day as transplant
 tmp2 %>% filter(sum(outcome)>1) %>%
@@ -1434,9 +1407,10 @@ tmp2 %>% filter(sum(outcome)>1) %>%
   select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
 
 # make only one death per px_id
+## data are still grouped by px_id
 tmp2 = tmp2 %>%
   mutate(outcome = ifelse(sum(outcome)>1 & outcome==1 & row_number() != n() & t_stop==lead(t_stop),0,outcome))
-table(tmp2$outcome,useNA="ifany") # 3224
+table(tmp2$outcome,useNA="ifany")
 
 # need to get rid of rows after outcome=1, without losing transplants
 tmp2 %>% mutate(outcome_cs=cumsum(cumsum(outcome))) %>% filter(any(outcome_cs>1)) %>%
@@ -1447,10 +1421,10 @@ tmp2 %>% mutate(outcome_cs=cumsum(cumsum(outcome))) %>% filter(any(outcome_cs>1)
 tmp2 = tmp2 %>% 
   filter(cumsum(cumsum(outcome))<=1 | transplant==1) %>% 
   ungroup()
-dim(table(tmp2$PX_ID)) # 21100
-table(tmp2$transplant) # 15516
-table(tmp2$outcome) # 3224
-tmp2 %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow() # 2248 now, instead of 2249
+dim(table(tmp2$PX_ID))
+table(tmp2$transplant)
+table(tmp2$outcome)
+tmp2 %>% filter(transplant==0,outcome==0,grepl("CAN_REM_DT",unique_event)) %>% nrow()
 
 # save as df
 df = tmp2
@@ -1458,15 +1432,7 @@ df = tmp2
 ```
 
 
-
-
-
-# Examine the single case: dropped in our dataset since no time available (same day)
-```{r, warning=F, comment=NA, message=F}
-df %>% filter(t_stop == 0)
-df %>% select(PX_ID, CAN_VAD1, CAN_VAD2, CAN_VAD_TY)
-```
-
+# Join earliest LVAD implant dates to df
 ```{r}
 df = df %>% left_join(lvads_earliest, by = "PX_ID")
 
@@ -1553,13 +1519,13 @@ durable_lvad_types = c('202', '205', '206', '207', '208', '209', '210',
                         '327', '330', '333', '334')
 
 
-df = df %>% mutate(
+df = df %>% ungroup() %>% mutate(
   durable_LVAD = case_when(
-    durable_lvad_implant_dt >= unique_date |
+    durable_lvad_implant_dt <= unique_date |
     ((CAN_VAD_TY == 2 & status_for_lvad != '5' & status_for_lvad != '6') & 
     ((CAN_VAD1 %in% durable_lvad_types) |
     (CAN_VAD2 %in% durable_lvad_types))) ~ 1,
-    TRUE ~ 0), 
+    TRUE ~ 0),
   
   
   RVAD = case_when(
@@ -1580,43 +1546,22 @@ df = df %>% mutate(
  TRUE ~ 0))
 
 # fill lvad variable down (LVAD ever variable)
-df = df %>% mutate(
+df = df %>% group_by(PX_ID) %>% mutate(
   durable_LVAD = case_when(
     durable_LVAD == 1 ~ 1,
     cumsum(durable_LVAD) > 0 ~ 1,
   TRUE ~ 0)
 )
 
-
-# df = df %>% select(-c(JustId,
-#                       start_date, death_date_max, transplant_date,
-#                       removal_date, removal_code_cand_thor, death_date, #
-
- #                      CAN_AGE_IN_MONTHS_AT_LISTING, CAN_INIT_STAT, CAN_VAD_TY, CAN_VAD1, CAN_VAD2, BivadPlacement, starts_with("Criteria")))
-
-df %>% select(PX_ID, CANHX_STAT_CD, RequestedCandStatCd, status)
-
-```
-```{r}
-df %>% filter(durable_lvad_implant_dt > unique_date & CriteriaLvadSupport == 1) %>% select(durable_lvad_implant_dt, unique_date, CriteriaLvadSupport, status)
-```
-```{r}
-full_list %>% filter(PX_ID == 729036) %>% select(JustId, unique_date, unique_event, CriteriaLvadSupport)
-
-just_stat4 %>% filter(PX_ID == 729036)
-stathist %>% filter(PX_ID == 729036)
-risk_strat %>% filter(PX_ID == 729036)
 ```
 
 
-
-
-# Add in BNP type and fix sodium
+# Add in BNP test type and fix sodium (plausible values)
 
 ```{r, warning=F, comment=NA, message=F}
 
 # indicator of BNP NT Pro
-df = df %>%
+df = df %>% ungroup()
   mutate(BNP_NT_Pro = ifelse(HrSevFailNtBnpType=='NT Pro BNP',1,0))
 df %>% filter(!is.na(BNP),is.na(HrSevFailNtBnpType)) %>% nrow()
 
@@ -1625,6 +1570,8 @@ df$sodium = as.numeric(df$sodium)
 df$sodium[df$sodium < 100] = NA
 ```
 
+
+# Short term MCS variables
 ```{r}
 #Short term MCS variables
 df = df %>% mutate(
@@ -1642,55 +1589,9 @@ df = df %>% mutate(
 ```
 
 
-```{r}
-# Check that all statuses have their associated justification criteria
-df %>% group_by(PX_ID) %>% filter(all(is.na(status_criteria)) & Exception == 0 & max(as.numeric(status)) < 5) %>% select(status, status_criteria)
-
-```
-```{r}
-df %>% filter(PX_ID == 1287572) %>% select(CriteriaLvadSupport.stat3, t_start, t_stop, CriteriaLvadDiscSupport, CAN_VAD_TY, status, CAN_VAD1, CAN_VAD2, durable_LVAD)
-
-cand_list %>% filter(PX_ID == 1271711) %>% select(CAN_VAD1)
-```
-
-
-
-
 # Select variables for final dataframe
 ```{r}
 save(df, file="heart_post_policy_full.Rdata")
 df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, JustId, RequestedCandStatCd, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial, durable_lvad_implant_dt)
-
-
 save(df, file = "heart_post_policy.RData")
-View(df)
-
-load("heart_post_policy_full.RData")
-
-
-
-```
-
-
-
-
-```{r}
-df %>% group_by(PX_ID) %>% filter(PX_ID == 1251084) %>% select(PX_ID, unique_date, durable_LVAD, status)
-
-df %>% filter(durable_LVAD == 1 & !(CAN_VAD1 %in% durable_lvad_types | CAN_VAD2 %in% durable_lvad_types)) %>% select(PX_ID, CriteriaLvadSupport.stat3, CriteriaLvadDiscSupport, CAN_VAD1, CAN_VAD2)
-```
-```{r}
-just_stat3 %>% filter(PX_ID == 1251088)
-
-just_form %>% filter(PX_ID == 1251088)
-
-cand_list %>% filter(PX_ID == 1251156)
-```
-```{r}
-load("cand_thor.RData")
-```
-
-```{r}
-cand_thor %>% filter(PX_ID == 1251156) %>% select()
-cand_thor$CAN_VAD_TAH
 ```
