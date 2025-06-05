@@ -217,16 +217,28 @@ lvads = thor_support_device %>%
   
   right_join(just_form_hr %>% select(ThorSupportDevicePrimary, JustId),
             by = c("DeviceId" = "ThorSupportDevicePrimary")) %>%
-  left_join(just_form_hr_stat4, by = c("JustId")) %>% 
-  filter(VadBrandId %in% c('202', '205', '206', '207', '208', '209', '210', 
+  left_join(just_form_hr_stat4, by = c("JustId")) %>%
+
+  # collapse all the brands
+  ## 239 is a PercuBrandId
+  mutate(BrandId = coalesce(VadBrandId,TahBrandId,PercuBrandId)) %>%
+  
+  # restrict to left ventricular support or other/specify
+  ## 2=right, 3=single
+  filter(VentricularSupportId %in% 1 |
+           (is.na(VentricularSupportId) & BrandId %in% 999)) %>%
+
+  # filter to desired LVADs
+  filter(BrandId %in% c('202', '205', '206', '207', '208', '209', '210', 
                         '212', '213', '214', '223', '224', '233', '236', 
                         '239', '240', '312', '313', '314', '315', '316', '319', '322', 
-                        '327', '330', '333', '334') | (VadBrandId == 999 & CriteriaLvadSupport == 1) | (VadBrandId == 999 & grepl(paste(lvad_keywords, collapse = "|"), OtherSpecify, ignore.case = TRUE)))
-# table(lvads$VadBrandId,useNA="ifany")
+                        '327', '330', '333', '334') | (BrandId == 999 & CriteriaLvadSupport == 1) | (BrandId == 999 & grepl(paste(lvad_keywords, collapse = "|"), OtherSpecify, ignore.case = TRUE)))
+# table(lvads$BrandId,useNA="ifany)
 # 
-#   205   209   223   224   233   236   999 
-#  7267    25    79 11949    20 25958   106 
+#   205   209   223   224   233   236   239   999 
+#  7255    25    79 11863    20 25897  1224    85 
 
+# get earliest implant date per PX_ID
 lvads_earliest = lvads %>% group_by(PX_ID) %>% mutate(
   durable_lvad_implant_dt = min(ImplantDt,na.rm=T)
 ) %>% select(PX_ID, durable_lvad_implant_dt) %>% distinct()
@@ -1551,8 +1563,7 @@ df = df %>% group_by(PX_ID) %>% mutate(
     durable_LVAD == 1 ~ 1,
     cumsum(durable_LVAD) > 0 ~ 1,
   TRUE ~ 0)
-)
-
+) 
 ```
 
 
@@ -1561,13 +1572,13 @@ df = df %>% group_by(PX_ID) %>% mutate(
 ```{r, warning=F, comment=NA, message=F}
 
 # indicator of BNP NT Pro
-df = df %>% ungroup()
+df = df %>% ungroup() %>%
   mutate(BNP_NT_Pro = ifelse(HrSevFailNtBnpType=='NT Pro BNP',1,0))
 df %>% filter(!is.na(BNP),is.na(HrSevFailNtBnpType)) %>% nrow()
 
 ### Assume sodium < 100 is a data entry error
-df$sodium = as.numeric(df$sodium)
-df$sodium[df$sodium < 100] = NA
+# df$sodium = as.numeric(df$sodium)
+# df$sodium[df$sodium < 100] = NA
 ```
 
 
@@ -1591,7 +1602,7 @@ df = df %>% mutate(
 
 # Select variables for final dataframe
 ```{r}
-save(df, file="heart_post_policy_full.Rdata")
+save(df, file="heart_post_policy_full.RData")
 df = df %>% select(PX_ID, CAN_LISTING_CTR_CD, unique_event, unique_date, t_start, t_stop, status, JustId, RequestedCandStatCd, status_criteria, Exception, transplant, outcome, age_at_listing, systolicBP, PCWP, PASP, PADP, resting_HR, diastolicBP, central_venous_pressure, cardiac_output, arterial_lactate, AST, creatinine, bilirubin, albumin, sodium, BNP, HemoHemoglobin, LDH, BUN, INR, CAN_REM_CD, diagnosis, diabetes, dialysis, CAN_PERIPH_VASC, ECMO, temp_surg_LVAD, BiVAD_no_discharge, durable_LVAD, RVAD, BiVAD, BNP_NT_Pro, last_active_date, last_inactive_date,  transplant_time, death_time, removal_time, status_initial, durable_lvad_implant_dt)
 save(df, file = "heart_post_policy.RData")
 ```
