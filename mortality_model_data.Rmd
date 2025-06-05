@@ -110,6 +110,7 @@ tx_status_hemo_model
 summary(tx_status_hemo_model)
 
 ## Model with US-CRS 1.0 vars, status, hemodynamics, and time since listing
+# (Cox model w/ left truncation)
 tx_status_hemo_waitlist_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
@@ -136,47 +137,66 @@ df_final <- df_final %>%
 ## assess covariate balance in weighted Table 1s ##
 
 ## Define variables for SMD tables
-vars <- c("albumin", "bilirubin", "eGFR", "sodium", "BNP", "BNP_NT_Pro", "durable_LVAD", "short_MCS_ever", "status", "cpo", "api", "papi", "interval_start")
+vars <- c("albumin", "bilirubin", "eGFR", "sodium", "BNP", "BNP_NT_Pro", "durable_LVAD", "short_MCS_ever", "cpo", "api", "papi", "interval_start", "status_num")
 
 gc()
 
 ## remove people missing status
 table_data = df_final %>% filter(!is.na(status)) %>%
-  # randomly grab 100k rows or it takes too long
-  ## WORKING: we should run with the full dataset (or at least full training set) for the paper
-  slice_sample(n=100000)
+  mutate(status_num = case_when(
+    status %in% "inactive" ~ "7",
+    T ~ status
+  ),
+  status_num = as.numeric(status_num))
+with(table_data,table(status_num,status))
 
 # make unweighted table
 tabUnweighted <- CreateTableOne(vars = vars, strata = "transplant", data = table_data, test = FALSE)
-print(tabUnweighted, smd = TRUE) # exact = "stage", quote = TRUE, noSpaces = TRUE
+print(tabUnweighted, smd = TRUE)
+printUnweighted = print(tabUnweighted, smd = TRUE, exact = "stage", quote = FALSE, noSpaces = TRUE, printToggle = F)
+write.csv(printUnweighted, file = "tabUnweighted.csv")
 
 ## make weight_simple table
 df_weights_simple <- svydesign(ids = ~ 1, data = table_data, weights = ~ weight_simple)
 tabWeighted_simple <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_simple, test = FALSE)
 print(tabWeighted_simple, smd = TRUE)
+printSimple = print(tabWeighted_simple, smd = TRUE, exact = "stage", quote = FALSE, noSpaces = TRUE, printToggle = F)
+write.csv(printSimple, file = "tabSimple.csv")
+
 
 ## make weight_status table
 df_weights_status <- svydesign(ids = ~ 1, data = table_data, weights = ~ weight_status)
 tabWeighted_status <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_status, test = FALSE)
 print(tabWeighted_status, smd = TRUE)
+printStatus = print(tabWeighted_status, smd = TRUE, exact = "stage", quote = FALSE, noSpaces = TRUE, printToggle = F)
+write.csv(printStatus, file = "tabStatus.csv")
+
 
 ## make weight_hemo table
 df_weights_hemo <- svydesign(ids = ~ 1, data = table_data, weights = ~ weight_hemo)
 tabWeighted_hemo <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_hemo, test = FALSE)
 print(tabWeighted_hemo, smd = TRUE)
+printHemo = print(tabWeighted_hemo, smd = TRUE, exact = "stage", quote = FALSE, noSpaces = TRUE, printToggle = F)
+write.csv(printHemo, file = "tabHemo.csv")
 
 ## make weight_waitlist table
 df_weights_waitlist <- svydesign(ids = ~ 1, data = table_data, weights = ~ weight_waitlist)
 tabWeighted_waitlist <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_waitlist, test = FALSE)
 print(tabWeighted_waitlist, smd = TRUE)
+printWaitlist = print(tabWeighted_waitlist, smd = TRUE, exact = "stage", quote = FALSE, noSpaces = TRUE, printToggle = F)
+write.csv(printWaitlist, file = "tabWaitlist.csv")
 
 # compare status and hemo models
-AIC(tx_status_model) # 114330
-AIC(tx_status_hemo_model) # 113961 - hemo does predict transplant
+AIC(tx_status_model) # 112936.7
+AIC(tx_status_hemo_model) # 112545 - hemo does predict transplant
+
+# any reason not to do hemo? positivity violations? no
+summary(df_final$fit_prob_status)
+summary(df_final$fit_prob_hemo)
 
 # with chosen model, set probability of not receiving a transplant each week
 df_final = df_final %>%
-  mutate(prob_no_tx = 1 - fit_prob_status)
+  mutate(prob_no_tx = 1 - fit_prob_hemo)
 
 # clean up
 rm(df_weights_hemo,df_weights_simple,df_weights_status,df_weights_waitlist,
@@ -350,7 +370,8 @@ train_data = train_data %>%
     row_number()==n() & outcome==1 ~ 1,
     row_number()==n() & !is.na(time_until_death_after_delisting) & is.na(time_until_censor_after_delisting) ~ 1,
     T ~ 0))
-table(train_data$outcome)
+table(train_data$outcome) # 1688
+table(train_data$outcome,train_data$CAN_REM_CD) # 923 removals due to deteriorated condition
 
 # more than one death per px_id? no
 train_data %>% group_by(PX_ID) %>% filter(sum(outcome)>1)
@@ -491,7 +512,7 @@ with(combined_df,tapply(sweight,week_from_baseline,function(x) table(x>10)))
 ```
 
 ## Distribution of landmarks
-WORKING: Might be better to show this with dates?
+For the supplement, to show which landmarks are contributing most strongly to estimates.
 ```{r}
 # give some indication of which landmarks are contributing most strongly to estimates
 ## effectively averaging over this distribution
@@ -499,13 +520,14 @@ WORKING: Might be better to show this with dates?
 combined_df %>% ungroup() %>% filter(week_from_baseline==1) %>%
   count(interval_start/7)
 
-ggplot(combined_df %>% ungroup() %>% filter(week_from_baseline==1),aes(interval_start/7)) +
+ggplot(combined_df %>% ungroup() %>% filter(week_from_baseline==1),aes(interval_start/365.25)) +
   geom_bar() +
-  coord_cartesian(xlim=c(0,500)) +
+  coord_cartesian(xlim=c(0,5)) +
   # scale_x_continuous(breaks=seq(0,300,50)) +
-  labs(x="Landmark start point (weeks from listing)",
-       y="Sample size") +
+  labs(x="Landmark start time (years from listing)",
+       y="Number of candidates") +
   theme_bw()
+ggsave("landmark-distribution.png",width=7.5,height=5,dpi=300)
 ```
 
 # Function to calculate robust confidence intervals for odds ratios
