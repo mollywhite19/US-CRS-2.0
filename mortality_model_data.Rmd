@@ -597,9 +597,19 @@ combined_df = combined_df %>% mutate(
 ## Mortality model without weights
 All linear effects, including hemodynamics.
 ```{r}
-mortality_model_no_weights = glm(formula = as.formula(
-  outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, family = binomial)
+# make standardized values
+combined_df = combined_df %>%
+  mutate(albumin_at_start_s = scale(albumin_at_start),
+         bilirubin_at_start_s = scale(log(bilirubin_at_start+1)),
+         eGFR_at_start_s = scale(eGFR_at_start),
+         BNP_at_start_s = scale(log(BNP_at_start+1)),
+         sodium_at_start_s = scale(sodium_at_start),
+         cpo_at_start_s = scale(cpo_at_start),
+         api_at_start_s = scale(api_at_start),
+         papi_at_start_s = scale(papi_at_start))
+basic_form = as.formula(outcome ~  albumin_at_start_s + bilirubin_at_start_s + eGFR_at_start_s + BNP_at_start_s*BNP_NT_Pro_at_start + sodium_at_start_s + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start_s + api_at_start_s + papi_at_start_s)         
+
+mortality_model_no_weights = glm(basic_form, data = combined_df, family = binomial)
 mortality_model_no_weights
 
 # for landmark model, use robust SEs (bc of repeat observations from same px_id)
@@ -660,9 +670,7 @@ uscrs_model
 
 ## Mortality model with (unstabilized) weights
 ```{r}
-mortality_model_weights = glm(formula = as.formula(
-  outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = weight, family = binomial)
+mortality_model_weights = glm(formula = basic_form, data = combined_df, weights = weight, family = binomial)
 mortality_model_weights
 
 # summary with robust CIs
@@ -676,9 +684,7 @@ mortality_model_weights_sum
 
 ## Mortality model with stabilized weights
 ```{r}
-mortality_model_sweights = glm(formula = as.formula(
-  outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = sweight, family = binomial)
+mortality_model_sweights = glm(basic_form, data = combined_df, weights = sweight, family = binomial)
 mortality_model_sweights
 
 # summary with robust CIs
@@ -692,18 +698,20 @@ mortality_model_sweights_sum
 
 ## Compare unweighted and weighted model coefficients
 ```{r}
-plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
-          mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
-          mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"))
-ggplot(plotdat %>% filter(var!="(Intercept)"),
-       aes(x = log(hr), y = var, color = model)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
-  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
-  geom_vline(xintercept=0) +
-  ## zoom in:
-  # coord_cartesian(xlim=c(-1,1)) +
-  theme_minimal()
+# new_names <- c("sodium_at_start" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start" = "PAPi", "log(BNP_at_start + 1)" = "Log BNP", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start" = "CPO", "api_at_start" = "API", "albumin_at_start" = "Albumin" )
+# plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
+#           mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
+#           mortality_model_sweights_sum %>% mutate(model="Stabilized Weights")) %>%
+#   mutate(var = recode(var, !!!new_names))
+# ggplot(plotdat %>% filter(var!="(Intercept)"),
+#        aes(x = log(hr), y = var, color = model)) +
+#   geom_point(position = position_dodge(width = 0.5)) +
+#   geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
+#   labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
+#   geom_vline(xintercept=0) +
+#   ## zoom in:
+#   # coord_cartesian(xlim=c(-1,1)) +
+#   theme_minimal()
 ```
 
 
@@ -721,10 +729,17 @@ summary(combined_df$tweight)
 # a little low; mean weight < 1
 with(combined_df,tapply(tweight,week_from_baseline,summary))
 
+# make a table 1 of weight distributions by week
+weighttab = combined_df %>% select(week_from_baseline,weight,sweight,tweight)
+weighttab$week_from_baseline = paste("Week",weighttab$week_from_baseline)
+label(weighttab$weight) = "Unstabilized"
+label(weighttab$sweight) = "Stabilized"
+label(weighttab$tweight) = "Stabilized + Truncated"
+table1(~ weight + sweight + tweight | week_from_baseline, 
+       data=weighttab %>% filter(!is.na(weight)), overall = F)
+
 # fit model with truncated weights
-mortality_model_tweights = glm(formula = as.formula(
-  outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start), data = combined_df, weights = tweight, family = binomial)
+mortality_model_tweights = glm(formula = basic_form, data = combined_df, weights = tweight, family = binomial)
 mortality_model_tweights
 
 # summary with robust CIs
@@ -737,21 +752,33 @@ mortality_model_tweights_sum
 
 # Compare unweighted, weighted, stabilized, truncated
 ```{r}
+new_names <- c("sodium_at_start_s" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start_s" = "PAPi", "BNP_at_start_s" = "Log BNP", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "BNP_at_start_s:BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "bilirubin_at_start_s" = "Log Bilirubin", "eGFR_at_start_s" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start_s" = "CPO", "api_at_start_s" = "API", "albumin_at_start_s" = "Albumin" )
+term_order <- c("Albumin","Log Bilirubin","eGFR", "Log BNP", "BNP NT Pro", "Log BNP * BNP NT Pro", "Sodium", "Durable LVAD", "Short-term MCS", "CPO", "API", "PAPi")
+
 # compare unweighted and weighted
 plotdat = bind_rows(mortality_model_no_weights_sum %>% mutate(model="Unweighted"),
           mortality_model_weights_sum %>% mutate(model="Unstabilized Weights"),
           mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"),
-          mortality_model_tweights_sum %>% mutate(model="Stabilized + Truncated Weights"))
+          mortality_model_tweights_sum %>% mutate(model="Stabilized + Truncated\nWeights")) %>%
+  mutate(var = recode(var, !!!new_names),
+         var = factor(var,levels=term_order),
+         model = factor(model,levels=c("Unweighted","Unstabilized Weights","Stabilized Weights","Stabilized + Truncated\nWeights")))
+
 ggplot(plotdat %>% filter(var!="(Intercept)"),
-       aes(x = log(hr), y = var, color = model)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
-  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
+       aes(x = log(hr), y = var, color = model, linetype=model)) +
+  geom_point(position = position_dodge(width = 0.5),size=1) +
+  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5),linewidth=.4) +
+  labs(x = "Coefficient Estimate", y = "Term", color="Model",linetype="Model") +
   geom_vline(xintercept=0) +
+  scale_color_viridis_d() +
   ## zoom in:
-  # coord_cartesian(xlim=c(-1,1)) +
-  theme_minimal()
+  # coord_cartesian(xlim=c(-.25,.25)) +
+  theme_bw() +
+  theme(text=element_text(size=12)) +
+  guides(color = guide_legend(reverse = TRUE),
+         linetype = guide_legend(reverse = TRUE))
 # in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
+ggsave("wts-compare.png",width=9,height=5)
 
 ```
 
@@ -805,43 +832,46 @@ With the stabilized weights, perform forward selection, starting from the US-CRS
 
    - Total years on durable LVAD
 
-WORKING: Try adding time since listing, previous values, interactions of current and previous values. Also, should we consider trimming to extreme quantiles (1st, 99th) to mitigate the impact of extreme (but plausible) values?
+IDEAS: Try adding time since listing, previous values, interactions of current and previous values. Also, we could consider trimming to extreme quantiles (1st, 99th) to mitigate the impact of extreme (but plausible) values.
 ```{r}
 # fit base model w/ stabilized weights
 mortality_model_base = glm(
   outcome ~ 
     albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start, data = combined_df, weights = sweight, family = binomial)
-AIC(mortality_model_base) # 63492.76
+AIC(mortality_model_base) # 63434.94
+
+# trim LVAD time to 10 years
+combined_df = combined_df %>% mutate(
+    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
 
 # model selection by AIC
 mort_mod_select = mod_select(mortality_model_base,list(
   week="+factor(week_from_baseline)",
   cpo="+cpo_at_start",
+  cpo_ns="+ns(cpo_at_start,df=3)",
   api="+api_at_start",
+  api_ns="+ns(api_at_start,df=3)",
   papi="+papi_at_start",
+  papi_ns="+ns(papi_at_start,df=3)",
   albumin_ns = "-albumin_at_start+ns(albumin_at_start,df=3)",
   bilirubin_ns = "-log(bilirubin_at_start+1)+ns(log(bilirubin_at_start+1),df=3)",
   eGFR_ns = "-eGFR_at_start+ns(eGFR_at_start,df=3)",
   BNP_ns = "-log(BNP_at_start + 1)*BNP_NT_Pro_at_start+ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start",
   sodium_ns = "-sodium_at_start+ns(sodium_at_start,df=3)",
   lvad_time = "+lvad_years_at_start",
+  lvad_ns = "+ns(lvad_years_at_start,df=3)",
   lvad_alb = "+durable_LVAD_at_start:albumin_at_start",
   lvad_bili = "+durable_LVAD_at_start:log(bilirubin_at_start+1)",
   lvad_eGFR = "+durable_LVAD_at_start:eGFR_at_start",
   lvad_sod = "+durable_LVAD_at_start:sodium_at_start"
   ))
-## Base AIC: 63492.76
-## Selected on March 12:
-# lvad_time (63156), eGFR_ns (62998), albumin_ns (62846), api (62770), BNP_ns (62722), bilirubin_ns (62693), sodium_ns (62668), lvad_bili (62647), week (62635), lvad_eGFR (62625), lvad_sod (62617)
+## Base AIC: 63434.94
+## Selected on June 5:
+# lvad_time_ns (63150), albumin_ns (62989), eGFR_ns (62865), papi_ns (62761), api_ns (62653), BNP_ns (62608), cpo_ns (62571), sodium_ns (62550), bilirubin_ns (62533), lvad_bili (62507), week (62500), lvad_egfr (62494), lvad_sod (62492)
 
 # fit final model
 mortality_model_selected = stats::update(mortality_model_base,mort_mod_select)
 mortality_model_selected
-
-# should api be nonlinear?
-# should LVAD time be nonlinear?
-# should LVAD time be trimmed to 10 years to avoid impact of extreme values?
-## answer: yes
 
 mortality_model_full = glm(
   outcome ~ 
