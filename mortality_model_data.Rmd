@@ -532,25 +532,6 @@ ggsave("landmark-distribution.png",width=7.5,height=5,dpi=300)
 
 # Function to calculate robust confidence intervals for odds ratios
 ```{r}
-# getHR <- function(model, vars, cov) {
-#   # Extract the coefficients for the variable of interest
-#   coef_var <- coef(model)[vars]
-#   
-#   # Compute the robust standard errors
-#   robust_se <- sqrt(diag(cov)[vars])
-#   
-#   # Calculate the odds ratio (OR) by exponentiating the coefficients
-#   hr <- exp(coef_var)
-#   
-#   # Calculate the 95% confidence intervals
-#   lowCI <- exp(coef_var - 1.96 * robust_se)
-#   highCI <- exp(coef_var + 1.96 * robust_se)
-#   
-#   # Return as a data frame with the OR and CIs
-#   return(data.frame(hr = hr, lowCI = lowCI, highCI = highCI))
-# }
-
-
 #############################
 # function to get HR for a linear combination of betas and normal-based CIs (helpful w/ interaction models)
 #############################
@@ -559,7 +540,7 @@ ggsave("landmark-distribution.png",width=7.5,height=5,dpi=300)
 ## comb: numeric vector (same length as vars) with multipliers for the linear combination, typically -1 or 1; default is 1 for a sum across coefficients in vars
 ## cov: covariance matrix for the coefficients; default is vcov(mod) but could be provided by the user (eg, an empirical covariance matrix derived from bootstrapping)
 ## alpha: significance level which determines two-sided confidence interval coverage; default is 0.05 for a 95% CI
-getHR = function(mod,vars,comb=rep(1,length(vars)),cov=vcov(mod),alpha=0.05) {
+getHR = function(mod,vars,comb=rep(1,length(vars)),cov=vcov(mod),transform=T,alpha=0.05) {
   # get beta from mod object
   beta = coef(mod)
   beta[is.na(beta)] = 0
@@ -579,11 +560,33 @@ getHR = function(mod,vars,comb=rep(1,length(vars)),cov=vcov(mod),alpha=0.05) {
   
   # compute the 95% CI
   se = sqrt(t(c) %*% cov %*% c)
-  lowCI = exp(xb - qnorm(1-alpha/2)*se)
-  highCI = exp(xb + qnorm(1-alpha/2)*se)
+  lowCI = xb - qnorm(1-alpha/2)*se
+  lowCI_hr = exp(lowCI)
+  highCI = xb + qnorm(1-alpha/2)*se
+  highCI_hr = exp(highCI)
   p = pnorm(abs(xb/se),lower.tail=F)*2
-  return(data.frame(hr,lowCI,highCI,p))
+  if (transform) {
+    df = data.frame(hr,lowCI=lowCI_hr,highCI=highCI_hr,p)
+  } else {
+    df = data.frame(xb,se,lowCI,highCI,p)
+  }
+  return(df)
 }
+
+#############################
+# function to format p-values
+#############################
+pval_format = function(p,include.p=F) {
+  if (include.p) {
+    p = ifelse(p<0.001,"p<0.001",
+               paste0("p=",ifelse(p<0.005,round(p,3),format(round(p,2),nsmall=2))))
+  } else {
+    p = ifelse(p<0.001,"<0.001",
+               ifelse(p<0.005,round(p,3),format(round(p,2),nsmall=2)))
+  }
+  return(p)
+}
+
 ```
 
 
@@ -873,27 +876,14 @@ mort_mod_select = mod_select(mortality_model_base,list(
 mortality_model_selected = stats::update(mortality_model_base,mort_mod_select)
 mortality_model_selected
 
-mortality_model_full = glm(
-  outcome ~ 
-    factor(week_from_baseline) +
-    ns(albumin_at_start,df=3) + 
-    ns(log(bilirubin_at_start + 1),df=3)*durable_LVAD_at_start + 
-    ns(eGFR_at_start,df=3)*durable_LVAD_at_start + 
-    ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start + #*durable_LVAD_at_start + 
-    ns(sodium_at_start,df=3)*durable_LVAD_at_start + 
-    durable_LVAD_at_start + 
-    short_mcs_ever_at_start +
-    ns(lvad_years_at_start,df=3) + #,knots=c(6,8)) +
-    ns(api_at_start,df=3), 
-  data = combined_df %>% mutate(
-    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)),
-  weights = sweight, family = binomial)
-AIC(mortality_model_full) # 62386
-
 # should LVAD also interact with BNP?
 ## answer: yes
 
-mortality_model_full2 = glm(
+mortality_model_full2 = update(mortality_model_selected,
+                               ~.+ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start*durable_LVAD_at_start)
+AIC(mortality_model_full2) # 62425
+
+mortality_model_full = glm(
   outcome ~ 
     factor(week_from_baseline) +
     ns(albumin_at_start,df=3) + 
@@ -904,12 +894,13 @@ mortality_model_full2 = glm(
     durable_LVAD_at_start + 
     short_mcs_ever_at_start +
     ns(lvad_years_at_start,df=3) + #,knots=c(6,8)) +
-    ns(api_at_start,df=3), 
-  data = combined_df %>% mutate(
-    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)),
+    # cpo_at_start +
+    ns(cpo_at_start,df=3) +
+    ns(api_at_start,df=3) +
+    ns(papi_at_start,df=3), 
+  data = combined_df,
   weights = sweight, family = binomial)
-AIC(mortality_model_full2) # 62331
-mortality_model_full = mortality_model_full2
+AIC(mortality_model_full) # 62405
 
 # look at model
 summary(mortality_model_full)
@@ -918,12 +909,58 @@ summary(mortality_model_full)
 attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"knots")
 attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"Boundary.knots")
 
+# make dataset of knots
+knotsdat = lapply(1:length(colnames(mortality_model_full$model)),function(i) {
+  coef_name = colnames(mortality_model_full$model)[i]
+  inner.knots = attr((mortality_model_full$model)[[coef_name]],"knots")
+  outer.knots = attr((mortality_model_full$model)[[coef_name]],"Boundary.knots")
+  if (!is.null(inner.knots)) {
+    return(data.frame(coef_name,knot1=outer.knots[1],knot2=inner.knots[1],
+                    knot3=inner.knots[2],knot4=outer.knots[2]))
+  }
+})
+knotsdat = do.call(rbind.data.frame,knotsdat)
+write.csv(knotsdat,file="knots.csv",row.names=F)
+
 # get robust SEs
 mortality_model_full_VCOV = vcovCL(mortality_model_full, cluster = ~ PX_ID)
 mortality_model_full_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_full)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_model_full,vars=var_interest,cov=mortality_model_full_VCOV))
 }))
 mortality_model_full_sum
+mortality_model_sum_coef = do.call(rbind.data.frame,lapply(names(coef(mortality_model_full)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_model_full,vars=var_interest,cov=mortality_model_full_VCOV,transform=F))
+}))
+mortality_model_sum_coef
+
+# make supplemental table of coefficients
+write.csv(mortality_model_sum_coef %>% rename(coef=xb) %>% mutate_at(.vars=vars(coef,se,lowCI,highCI),round,digits=3) %>% mutate(p=pval_format(p)),
+          file="mortality-model-coefs.csv",row.names=F)
+
+# Short-term MCS hazard ratio (95% CI):
+mortality_model_full_sum[mortality_model_full_sum$var=="short_mcs_ever_at_start",]
+
+# Durable LVAD hazard ratio (95% CI):
+
+# all the terms with durable LVAD
+lvad_termnames = (names(coef(mortality_model_full)))[grepl("LVAD",names(coef(mortality_model_full)))]
+lvad_termnames
+
+## first get the splines for average lab values
+knotsdat$coef_name
+rownames(knotsdat) = c("albumin","bilirubin","eGFR","BNP","sodium","lvad_years","cpo","api","papi")
+bili_avg_ns = ns(log(mean(combined_df$bilirubin_at_start)+1),3,knots=as.numeric(knotsdat["bilirubin",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["bilirubin",c("knot1","knot4")]))
+egfr_avg_ns = ns(mean(combined_df$eGFR_at_start),3,knots=as.numeric(knotsdat["eGFR",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["eGFR",c("knot1","knot4")]))
+bnp_avg_ns = ns(log(mean(combined_df$BNP_at_start[combined_df$BNP_NT_Pro==0])+1),3,knots=as.numeric(knotsdat["BNP",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["BNP",c("knot1","knot4")]))
+sod_avg_ns = ns(mean(combined_df$sodium_at_start),3,knots=as.numeric(knotsdat["sodium",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["sodium",c("knot1","knot4")]))
+
+# now get hazard ratio for LVAD at average lab values
+lvad_termnames
+getHR(mortality_model_full,
+      vars=lvad_termnames,
+      comb=c(1,bili_avg_ns,egfr_avg_ns,bnp_avg_ns,0,sod_avg_ns,0,0,0),
+      cov=mortality_model_full_VCOV)
+
 ```
 
 ## Calculate predicted survival without transplant in training data
@@ -968,9 +1005,8 @@ quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
 ## SAVE MORTALITY MODEL
 # also, function to calculate predicted 6-week survival
 # also, model for numerator of stabilized weights
-save(mortality_model_full,pred_data_fun,tx_model_first,file="mortality-model.Rdata")
-
-
+save(mortality_model_full,pred_data_fun,tx_model_first,file="mortality-model.RData")
+save(combined_df,file="mortality-df.RData")
 
 # summarize survival probability by status
 with(pred_data,tapply(prob_surv_6wk,status_at_start,summary))
@@ -981,7 +1017,8 @@ ggplot(pred_data %>% filter(!is.na(status),!(status=="inactive")),
        aes(x = status_at_start, y = prob_surv_6wk)) +
   geom_boxplot(alpha=.25) + 
   facet_zoom(y = prob_surv_6wk > .95) +  
-  labs(x = "Status", y = "6-Week Survival Probability", title = "Figure 1: Box plots of predicted 6-week survival without transplant\nin adult heart candidates, 2019-2022, by status") +
+  labs(x = "Status", y = "6-Week Survival Probability") +
+  # title = "Figure 1: Box plots of predicted 6-week survival without transplant\nin adult heart candidates, 2019-2022, by status"
   theme_bw()
 ggsave("pred-by-status.png",width=6,height=4)
 ```
@@ -1017,31 +1054,30 @@ new_data_lvad <- data.frame(
   lvad_years_at_start = seq(0,10,.2)
 )
 head(new_data_lvad)
-pred_lvad <- predict(mortality_model_full, 
-                newdata = new_data_lvad,
-                type = "response")
-new_data_lvad$pred_surv_6_weeks = (1-pred_lvad)^6
+pred_lvad <- pred_data_fun(new_data_lvad)
 
 # make plot
 ## add distribution of years on LVAD
 ## add lines for Status 3 and 4
-ggplot(new_data_lvad, aes(x = lvad_years_at_start, y = pred_surv_6_weeks)) +
+ggplot(pred_lvad, aes(x = lvad_years_at_start, y = prob_surv_6wk)) +
   geom_line(size = 1) +
   labs(
-    title = "Effect of LVAD years on 6-week survival probability in durable LVAD patients",
+    #title = "Effect of LVAD years on 6-week survival probability in durable LVAD patients",
     x = "Years with LVAD",
-    y = "6-week survival without transplant"
+    y = "6-Week Survival Probability"#survival without transplant"
   ) +
-  theme_minimal() + 
+  theme_bw() + 
   coord_cartesian(xlim=c(0,10),
                   ylim=c(.97,1)) +
   scale_x_continuous(breaks=seq(0,10,1)) +
   geom_hline(yintercept=prob_surv_6wk_status["3"]) +
-  geom_text(aes(0,prob_surv_6wk_status["3"],label="Status 3",vjust=-1)) +
+  geom_text(aes(4,prob_surv_6wk_status["3"],label="Status 3",vjust=-1)) +
   geom_hline(yintercept=prob_surv_6wk_status["4"]) +
-  geom_text(aes(0,prob_surv_6wk_status["4"],label="Status 4",vjust=-1))
-prob_surv_6wk_status
+  geom_text(aes(4,prob_surv_6wk_status["4"],label="Status 4",vjust=-1))
+ggsave("pred-by-LVADtime.png",width=6,height=4)
 
+# distribution of time on LVAD in training data, including all landmarks
+summary(pred_data$lvad_years_at_start[pred_data$durable_LVAD_at_start==1])
 ```
 
 
@@ -1214,7 +1250,6 @@ ggplot(sod_rr %>% mutate(durable_lvad=factor(durable_lvad)),
 #   theme_bw() +
 #   theme(text=element_text(size=14))
 
-## working
 # BNP
 bnp_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==0),
                   seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
@@ -1266,6 +1301,71 @@ ggplot(bnp_rr %>% mutate(durable_lvad=factor(durable_lvad)),
   # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
   labs(x="BNP",y="Adjusted hazard ratio (95% CI)",
        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+
+```
+
+
+## Summarize hemodynamic effects
+```{r}
+
+## api
+api_range = with(pred_data,seq(min(api_at_start),quantile(api_at_start,.99),length.out=200))
+api_spl = ns(api_range,df=3,
+              knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"Boundary.knots"))
+api_rr = cbind.data.frame(
+  api = api_range,
+  do.call(rbind.data.frame,apply(api_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("api",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})))
+
+## papi
+papi_range = with(pred_data,seq(min(papi_at_start),quantile(papi_at_start,.95),length.out=200))
+papi_spl = ns(papi_range,df=3,
+              knots=attr(mortality_model_full$model$`ns(papi_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(papi_at_start, df = 3)`,"Boundary.knots"))
+papi_rr = cbind.data.frame(
+  papi = papi_range,
+  do.call(rbind.data.frame,apply(papi_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("papi",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})))
+
+## cpo
+cpo_range = with(pred_data,seq(min(cpo_at_start),max(cpo_at_start),length.out=200))
+cpo_spl = ns(cpo_range,df=3,
+              knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"Boundary.knots"))
+cpo_rr = cbind.data.frame(
+  cpo = cpo_range,
+  do.call(rbind.data.frame,apply(cpo_spl,1,function(row) {
+                getHR(mortality_model_full,
+                  vars=names(coef(mortality_model_full))[grepl("cpo",names(coef(mortality_model_full)))][1:3],
+                  comb=row,
+                  cov=mortality_model_full_VCOV)})))
+
+# make the plot
+ggplot(bind_rows(api_rr %>% rename(value=api) %>% mutate(hemo="API"),
+                 papi_rr %>% rename(value=papi) %>% mutate(hemo="PAPi"),
+                 cpo_rr %>% rename(value=cpo) %>% mutate(hemo="CPO")) %>%
+         mutate(hemo=factor(hemo,levels=c("CPO","API","PAPi"))),
+       aes(x=value,y=hr)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     # breaks=c(.25,.5,1,2,4,8),
+                     limits=c(.25,16),
+                     oob = scales::rescale_none) +
+  facet_grid(~hemo,scales="free") +
+  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+  labs(x=NULL,y="Adjusted hazard ratio (95% CI)") +
+       # linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
   theme_bw() +
   theme(text=element_text(size=14))
 
@@ -1326,96 +1426,4 @@ ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
 
 new_names
 ```
-
-
-```{r}
-mortality_model_sweights_lvad_time = glm(formula = as.formula(
-  outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1):BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + cpo_at_start + api_at_start + papi_at_start + rcs(lvad_years_at_start, 5)), data = combined_df, weights = sweight, family = binomial)
-
-
-mortality_model_sweights
-
-# summary with robust CIs
-mortality_model_sweights_VCOV = vcovCL(mortality_model_sweights_lvad_time, cluster = ~ PX_ID)
-mortality_model_sweights_lvad_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_sweights_lvad_time)),function(var_interest) {
-  bind_cols(var=var_interest,getHR(mortality_model_sweights_lvad_time,vars=var_interest,cov=mortality_model_sweights_VCOV))
-}))
-
-# compare lvad time vs no
-plotdat = bind_rows(mortality_model_sweights_lvad_sum %>% mutate(model="Stabilized Weights + lvad time"),
-          mortality_model_sweights_sum %>% mutate(model="Stabilized Weights"))
-
-ggplot(plotdat %>% filter(var!="(Intercept)"),
-       aes(x = log(hr), y = var, color = model)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5)) +
-  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
-  geom_vline(xintercept=0)  +
-  xlim(c(-3,3))
-ggsave("stabilized_weights_lvad_time.png", height = 7, width = 16)
-summary(combined_df$durable_lvad_time)
-
-
-```
-```{r}
-combined_df$BNP_at_start
-table(combined_df$BNP_NT_Pro_at_start)
-
-new_data <- data.frame(
-  albumin_at_start = mean(combined_df$albumin_at_start, na.rm = TRUE),
-  bilirubin_at_start = mean(combined_df$bilirubin_at_start, na.rm = TRUE),
-  eGFR_at_start = mean(combined_df$eGFR_at_start, na.rm = TRUE),
-  BNP_at_start = mean(combined_df$BNP_at_start, na.rm = TRUE),
-  BNP_NT_Pro_at_start = "0",
-  sodium_at_start = mean(combined_df$sodium_at_start, na.rm = TRUE),
-  durable_LVAD_at_start = 1, # Only generate data for LVAD patients
-  short_mcs_ever_at_start = 0, # Example binary predictor
-  cpo_at_start = mean(combined_df$cpo_at_start, na.rm = TRUE),
-  api_at_start = mean(combined_df$api_at_start, na.rm = TRUE),
-  papi_at_start = mean(combined_df$papi_at_start, na.rm = TRUE),
-  lvad_years_at_start = seq(min(combined_df$lvad_years_at_start[combined_df$durable_LVAD_at_start == 1], na.rm = TRUE),
-                            max(combined_df$lvad_years_at_start, na.rm = TRUE), length.out = 100)
-)
-
-pred <- predict(mortality_model_sweights_lvad_time, 
-                newdata = new_data,
-                type = "response")
-
-new_data$pred_surv_6_weeks = (1-pred)^6
-new_data$predicted <- pred
-
-ggplot(new_data, aes(x = lvad_years_at_start, y = pred_surv_6_weeks)) +
-  geom_line(size = 1) +
-  labs(
-    title = "Effect of LVAD Years on Survival Probability (Durable LVAD Patients)",
-    x = "Years with LVAD",
-    y = "Predicted Probability of 6-week Survival"
-  ) +
-  theme_minimal() + 
-  xlim(c(0,5.5)) + 
-  ylim(c(0.985,1))
-
-combined_df$sweights_predictions = predict(mortality_model_sweights_lvad_time, newdata = combined_df, type = "response")
-combined_df$surv_prob_6week_sweight = (1-combined_df$sweights_predictions)^6
-new_data %>% select(lvad_years_at_start, predicted)
-
-summary(combined_df$surv_prob_6week_sweight)
-
-# survival probability histogram
-ggplot(combined_df, aes(x = surv_prob_6week_sweight)) +
-  geom_histogram(binwidth = 0.0001, fill = "blue", color = "black", alpha = 0.7) +
-  scale_x_continuous(limits = c(0.99, 1)) + # Zoom in to the range [0.99, 1]
-  labs(
-    title = "Histogram of surv_prob_6week_sweight",
-    x = "Survival Probability at 6 Weeks (Stabilized Weight)",
-    y = "Count"
-  ) +
-  theme_minimal()
-
-mortality_model_sweights_lvad_time
-
-table(combined_df$outcome)
-```
-
 
