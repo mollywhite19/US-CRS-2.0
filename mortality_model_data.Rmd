@@ -51,6 +51,14 @@ summary(df_final$api)
 
 # time on LVAD at current_date
 df_final = df_final %>% mutate(
+  durable_LVAD = case_when(
+    durable_lvad_time > 0 ~ 1,
+    T ~ durable_LVAD
+  ),
+  durable_lvad_time = case_when(
+    durable_LVAD == 1 & durable_lvad_implant_dt > current_date ~ as.numeric(current_date - as.Date(can_listing_dt)),
+    TRUE ~ durable_lvad_time
+  ),
   lvad_years = durable_lvad_time/365.25
 )
 ```
@@ -485,7 +493,7 @@ with(combined_df,table(prob_no_tx==1,prob_no_tx_start==1))
 # Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
 combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
   sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
-)
+) %>% ungroup
 
 
 ```
@@ -497,7 +505,6 @@ summary(combined_df$sweight)
 
 # some people missing weights; these are people with weird statuses
 combined_df %>% filter(is.na(weight)) %>%
-  ungroup %>%
   count(PX_ID,status)
 ```
 
@@ -835,17 +842,33 @@ With the stabilized weights, perform forward selection, starting from the US-CRS
 
    - Total years on durable LVAD
 
-IDEAS: Try adding time since listing, previous values, interactions of current and previous values. Also, we could consider trimming to extreme quantiles (1st, 99th) to mitigate the impact of extreme (but plausible) values.
+IDEAS: Try adding time since listing, previous values, interactions of current and previous values.
 ```{r}
+# trim LVAD time to 10 years
+combined_df = combined_df %>% mutate(
+    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
+
+# trim other continuous variables to 1st and 99th percentiles
+trimOuter = function(x) {
+  q99 = quantile(x,.99,na.rm=T)
+  q01 = quantile(x,.01,na.rm=T)
+  
+  x[x>q99] = q99
+  x[x<q01] = q01
+  return(x)
+}
+combined_df = combined_df %>%
+  mutate_at(vars(albumin_at_start,bilirubin_at_start,eGFR_at_start,
+              sodium_at_start,cpo_at_start,api_at_start,papi_at_start),
+            trimOuter) %>%
+  group_by(BNP_NT_Pro_at_start) %>%
+  mutate_at(vars(BNP_at_start),trimOuter) %>% ungroup
+
 # fit base model w/ stabilized weights
 mortality_model_base = glm(
   outcome ~ 
     albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start, data = combined_df, weights = sweight, family = binomial)
-AIC(mortality_model_base) # 63434.94
-
-# trim LVAD time to 10 years
-combined_df = combined_df %>% mutate(
-    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
+AIC(mortality_model_base) # 63057.9
 
 # model selection by AIC
 mort_mod_select = mod_select(mortality_model_base,list(
@@ -862,26 +885,34 @@ mort_mod_select = mod_select(mortality_model_base,list(
   BNP_ns = "-log(BNP_at_start + 1)*BNP_NT_Pro_at_start+ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start",
   sodium_ns = "-sodium_at_start+ns(sodium_at_start,df=3)",
   lvad_time = "+lvad_years_at_start",
-  lvad_ns = "+ns(lvad_years_at_start,df=3)",
+  lvad_ns = "+ns(lvad_years_at_start,df=3,knots=c(1,3))",
   lvad_alb = "+durable_LVAD_at_start:albumin_at_start",
   lvad_bili = "+durable_LVAD_at_start:log(bilirubin_at_start+1)",
   lvad_eGFR = "+durable_LVAD_at_start:eGFR_at_start",
   lvad_sod = "+durable_LVAD_at_start:sodium_at_start"
   ))
-## Base AIC: 63434.94
-## Selected on June 5:
-# lvad_time_ns (63150), albumin_ns (62989), eGFR_ns (62865), papi_ns (62761), api_ns (62653), BNP_ns (62608), cpo_ns (62571), sodium_ns (62550), bilirubin_ns (62533), lvad_bili (62507), week (62500), lvad_egfr (62494), lvad_sod (62492)
+## Base AIC: 63057.9
+## Selected on June 9 (LVAD time fix + trimming):
+# lvad_ns (62763), api_ns (62629), papi_ns (62516), eGFR_ns (62413), sodium_ns (62348), BNP_ns (62309), lvad_bili (62290), bilirubin_ns (62276), albumin_ns (62265), week (62255), lvad_eGFR (62249), cpo_ns (62247)
 
 # fit final model
 mortality_model_selected = stats::update(mortality_model_base,mort_mod_select)
 mortality_model_selected
+AIC(mortality_model_selected)
+
+# what about linear CPO?
+mortality_model_full2 = update(mortality_model_selected,
+                               ~.-ns(cpo_at_start,df=3)+cpo_at_start)
+AIC(mortality_model_full2) # 62248
+## CPO doesn't seem to add much so we can skip CPO.
 
 # should LVAD also interact with BNP?
 ## answer: yes
 
 mortality_model_full2 = update(mortality_model_selected,
-                               ~.+ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start*durable_LVAD_at_start)
-AIC(mortality_model_full2) # 62425
+                               ~.-ns(cpo_at_start,df=3)
+                               +ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start*durable_LVAD_at_start)
+AIC(mortality_model_full2) # 62175
 
 mortality_model_full = glm(
   outcome ~ 
@@ -890,24 +921,22 @@ mortality_model_full = glm(
     ns(log(bilirubin_at_start + 1),df=3)*durable_LVAD_at_start + 
     ns(eGFR_at_start,df=3)*durable_LVAD_at_start + 
     ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start*durable_LVAD_at_start + 
-    ns(sodium_at_start,df=3)*durable_LVAD_at_start + 
+    ns(sodium_at_start,df=3) + 
     durable_LVAD_at_start + 
     short_mcs_ever_at_start +
-    ns(lvad_years_at_start,df=3) + #,knots=c(6,8)) +
-    # cpo_at_start +
-    ns(cpo_at_start,df=3) +
+    ns(lvad_years_at_start,df=3,knots=c(1,3)) + #,knots=c(6,8)) +
     ns(api_at_start,df=3) +
     ns(papi_at_start,df=3), 
   data = combined_df,
   weights = sweight, family = binomial)
-AIC(mortality_model_full) # 62405
+AIC(mortality_model_full) # 62172.65
 
 # look at model
 summary(mortality_model_full)
 
 # look at knots for LVAD years
-attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"knots")
-attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3)`,"Boundary.knots")
+attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"knots")
+attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"Boundary.knots")
 
 # make dataset of knots
 knotsdat = lapply(1:length(colnames(mortality_model_full$model)),function(i) {
@@ -948,7 +977,7 @@ lvad_termnames
 
 ## first get the splines for average lab values
 knotsdat$coef_name
-rownames(knotsdat) = c("albumin","bilirubin","eGFR","BNP","sodium","lvad_years","cpo","api","papi")
+rownames(knotsdat) = c("albumin","bilirubin","eGFR","BNP","sodium","lvad_years","api","papi")
 bili_avg_ns = ns(log(mean(combined_df$bilirubin_at_start)+1),3,knots=as.numeric(knotsdat["bilirubin",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["bilirubin",c("knot1","knot4")]))
 egfr_avg_ns = ns(mean(combined_df$eGFR_at_start),3,knots=as.numeric(knotsdat["eGFR",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["eGFR",c("knot1","knot4")]))
 bnp_avg_ns = ns(log(mean(combined_df$BNP_at_start[combined_df$BNP_NT_Pro==0])+1),3,knots=as.numeric(knotsdat["BNP",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["BNP",c("knot1","knot4")]))
@@ -958,7 +987,7 @@ sod_avg_ns = ns(mean(combined_df$sodium_at_start),3,knots=as.numeric(knotsdat["s
 lvad_termnames
 getHR(mortality_model_full,
       vars=lvad_termnames,
-      comb=c(1,bili_avg_ns,egfr_avg_ns,bnp_avg_ns,0,sod_avg_ns,0,0,0),
+      comb=c(1,bili_avg_ns,egfr_avg_ns,bnp_avg_ns,0,0,0,0),
       cov=mortality_model_full_VCOV)
 
 ```
@@ -1311,7 +1340,7 @@ ggplot(bnp_rr %>% mutate(durable_lvad=factor(durable_lvad)),
 ```{r}
 
 ## api
-api_range = with(pred_data,seq(min(api_at_start),quantile(api_at_start,.99),length.out=200))
+api_range = with(pred_data,seq(min(api_at_start),max(api_at_start),length.out=200))
 api_spl = ns(api_range,df=3,
               knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"knots"),
               Boundary.knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"Boundary.knots"))
@@ -1337,23 +1366,22 @@ papi_rr = cbind.data.frame(
                   cov=mortality_model_full_VCOV)})))
 
 ## cpo
-cpo_range = with(pred_data,seq(min(cpo_at_start),max(cpo_at_start),length.out=200))
-cpo_spl = ns(cpo_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"Boundary.knots"))
-cpo_rr = cbind.data.frame(
-  cpo = cpo_range,
-  do.call(rbind.data.frame,apply(cpo_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("cpo",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})))
+# cpo_range = with(pred_data,seq(min(cpo_at_start),quantile(cpo_at_start,.99),length.out=200))
+# cpo_spl = ns(cpo_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"Boundary.knots"))
+# cpo_rr = cbind.data.frame(
+#   cpo = cpo_range,
+#   do.call(rbind.data.frame,apply(cpo_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("cpo",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})))
 
 # make the plot
 ggplot(bind_rows(api_rr %>% rename(value=api) %>% mutate(hemo="API"),
-                 papi_rr %>% rename(value=papi) %>% mutate(hemo="PAPi"),
-                 cpo_rr %>% rename(value=cpo) %>% mutate(hemo="CPO")) %>%
-         mutate(hemo=factor(hemo,levels=c("CPO","API","PAPi"))),
+                 papi_rr %>% rename(value=papi) %>% mutate(hemo="PAPi")) %>%
+         mutate(hemo=factor(hemo,levels=c("API","PAPi"))),
        aes(x=value,y=hr)) +
   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
   geom_line(color="black",linewidth=.75) +
