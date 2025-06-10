@@ -42,14 +42,7 @@ test_data = test_data %>%
 
 ```{r}
 test_data = test_data %>% mutate(can_listing_dt = as.Date(can_listing_dt),
-                                               transplant_date = as.Date(transplant_date))
-
-
-#most recent date on waitlist
-#not using this rn but have it just in case
-test_data = test_data %>%group_by(PX_ID) %>% mutate(
-  last_wait_date = pmax(last_active_date, last_inactive_date, na.rm = T)
-) 
+                                 transplant_date = as.Date(transplant_date))
 
 table(test_data$status)
 ```
@@ -155,9 +148,11 @@ test_data = test_data %>% mutate(
 )
 
 
+
+
 ```
 
-
+# Calculate time to event
 ```{r}
 # Time to event based on death, removal for deterioration, tx, or censoring
 
@@ -181,7 +176,7 @@ test_data = test_data %>%
     time = pmin(time_to_transplant, time_to_death, time_to_removal_deteriorate, 42, na.rm = T)
   )
 
-# define follow up time in weeks, outcome dependent on whether it ocurred in interval
+# define follow up time in weeks, outcome dependent on whether it occurred in interval
 test_data = test_data %>% 
   mutate(
     follow_up_int = case_when(
@@ -204,14 +199,7 @@ test_data_actives = test_data %>% filter(!(status %in% c("inactive", "off_waitli
 
 ```
 
-
-
-
-
-
-
-
-
+# Create nonoverlapping test intervals by calendar date
 ```{r}
 # Subset data at certain calendar dates
 # Calculate wait time at specific calendar date
@@ -261,6 +249,7 @@ eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixt
 
 ```
 
+# Rank patients by status and waiting time
 ```{r}
 # Rank patients by status and wait time
 # If status and wait time are the same, set the rank to be equal
@@ -312,8 +301,7 @@ first_int %>% filter(status == 4) %>% arrange(desc(wait_time)) %>% select(PX_ID,
 first_int %>% arrange(status) %>% select(status,rank, wait_time)
 ```
 
-
-
+# Calculate predicted 6-week survival probabilities with US-CRS 2.0
 ```{r}
 # Extract 6 week survival probability of our model
 # Convert to vector ? (Troubleshooting the AUC problems)
@@ -352,8 +340,7 @@ eighth_int = pred_data_fun(eighth_int) %>% mutate(
 second_int
 ```
 
-
-
+# Flip rankings so that higher = higher risk
 ```{r}
 # Flip the predictors to be higher when the candidate is higher risk of death
 # Keep out for now since we are using predicted probability of survival in AUC
@@ -411,7 +398,7 @@ eighth_int = eighth_int %>%
 eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
 ```
 
-
+# Plot pooled ROC across nonoverlapping intervals of test set
 ```{r}
 # pooled roc
 auc6wk <- Score(
@@ -431,54 +418,48 @@ df = auc6wk$ROC$plotframe
 df_status = df %>% filter(model == "status only")
 
 # Plot the ROC curve
-ggplot(df, aes(x = FPR, y = TPR, color = model)) +
-  geom_line() +
-  labs(title = "ROC Curve", x = "False Positive Rate (FPR)", y = "True Positive Rate (TPR)") +
-  theme_minimal() + 
+ggplot(df %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))), 
+       aes(x = FPR, y = TPR, color = model)) +
+  geom_line(linewidth=.95,alpha=.75) +
+  geom_point(data=df_status %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))),aes(x=FPR,y=TPR),size=2.5) +
+  scale_color_viridis_d() +
+  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
+  # title = "Pooled ROC Curve", 
+  theme_bw() + 
+  theme(text=element_text(size=14)) +
   ylim(c(0,1))
+ggsave("pooled-roc.png",width=6.5,height=4.5)
 
+# compare AUC in pooled data
+## note: ignores patients who appear in multiple intervals
+auc6wk
 
-
-
+#                    model times    AUC  lower  upper
+#                   <fctr> <num> <char> <char> <char>
+# 1:                 uscrs     6   84.8   81.6   88.0
+# 2: waiting time + status     6   73.9   69.3   78.4
+# 3:           status only     6   74.1   69.9   78.3
 
 ```
 
-
-
-
-
-
-
-
+# Calculate AUC in each interval
 ```{r}
 #datasets for looping
 datasets <- list(first_int, second_int, third_int, fourth_int, 
                  fifth_int, sixth_int, seventh_int, eighth_int)
 
-auc_results <- list()
+# set dates
+dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15","2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
 
-# # look at p-value for comparisons
-# for (i in 1:length(datasets)) {
-#   auc_results[[i]] <- Score(
-#     list("uscrs" = datasets[[i]]$prob_outcome_6wk, "status" = datasets[[i]]$rank),
-#     formula = Hist(follow_up_int, outcome) ~ albumin + log(bilirubin + 1) + 
-#               eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
-#               durable_LVAD + short_MCS_ever + status,
-#     data = datasets[[i]] %>% 
-#               mutate(follow_up_int = ifelse(outcome == 0, follow_up_int + 0.001, follow_up_int)),
-#     cens.method = "ipcw", cens.model = "cox",
-#     conf.int = TRUE,
-#     times = 6,
-#     metrics = c("auc"),
-#     conservative = TRUE
-#   )$AUC$contrasts[,"p"]
-# }
-# auc_results
+# initialize lists
+auc_results <- list()
+p_val <- list()
+roc_plot <- list()
 
 # Loop through datasets to compute AUC
 for (i in 1:length(datasets)) {
-  auc_results[[i]] <- Score(
-    list("uscrs" = datasets[[i]]$prob_outcome_6wk, "status" = datasets[[i]]$rank),
+  auc_tmp <- Score(
+    list("uscrs" = datasets[[i]]$prob_outcome_6wk, "waiting time + status" = datasets[[i]]$rank, "status only" = datasets[[i]]$status_flipped),
     formula = Hist(follow_up_int, outcome) ~ albumin + log(bilirubin + 1) + 
               eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
               durable_LVAD + short_MCS_ever + status,
@@ -488,25 +469,31 @@ for (i in 1:length(datasets)) {
     conf.int = TRUE,
     times = 6,
     metrics = c("auc"),
-    conservative = TRUE
-  )$AUC$score %>%
+    conservative = TRUE,
+    plots = "roc"
+  )
+  roc_plot[[i]] <- auc_tmp$ROC$plotframe %>% mutate(Date=dates[i])
+  p_val[[i]] <- auc_tmp$AUC$contrasts
+  auc_results[[i]] <- auc_tmp$AUC$score %>%
     mutate(dataset = paste0("Dataset_", i))  # Add dataset identifier
 }
+pval_df <- do.call(rbind.data.frame,p_val)
+auc_df <- bind_rows(auc_results) %>%
+  mutate(Model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time")))
+# auc_df$Model = ifelse(auc_df$model == "uscrs", "US-CRS 2.0", "Status Quo")
+roc_df <- do.call(rbind.data.frame,roc_plot)
 
-auc_df <- bind_rows(auc_results)
-auc_df$Model = ifelse(auc_df$model == "uscrs", "US-CRS 2.0", "Status Quo")
-
-dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
-                           "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
-auc_df$Date <- rep(dates, each = 2)
+# add dates
+auc_df$Date <- rep(dates, each = 3)
+pval_df$Date <- rep(dates, each = 3)
 
 
-ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, linetype = Model)) +
-  geom_point(position = position_dodge(width = 24)) +
-  geom_line(position = position_dodge(width = 24)) +
+ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
+  geom_point(position = position_dodge(width = 24),size=2) +
+  geom_line(position = position_dodge(width = 24),alpha=.85) +
   geom_errorbar(position = position_dodge(width = 24),width=15) +
   labs(
-    title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
+    #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
     x = "Start date for cross-section",
     y = "AUC (6-week mortality)"
   ) +
@@ -530,15 +517,31 @@ ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model,
     labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023",
                "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023")
   ) +
-  scale_color_manual(values = c("orange","darkblue")) +
-  scale_linetype_manual(values = c("dashed","solid"))
-
-
+  scale_color_viridis_d()
+  # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
+  # scale_linetype_manual(values = c("dashed","solid","solid"))
 ggsave("uscrs_auc_comparison.png", width = 6, height = 4, dpi = 300)
 
+# look for significant differences in AUC
+pval_df %>% filter(model=="waiting time + status",p<0.1)
+pval_df %>% filter(model=="status only",p<0.1)
+
+# make faceted ROC plots
+
+roc_df = roc_df %>% mutate(Model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time")))
+ggplot(roc_df, 
+       aes(x = FPR, y = TPR, color = Model)) +
+  geom_line(linewidth=.95,alpha=.85) +
+  geom_point(data=roc_df %>% filter(model=="status only"),aes(x=FPR,y=TPR),size=1.75) +
+  scale_color_viridis_d() +
+  scale_x_continuous(breaks=seq(0,1,.25),labels=c("0",".25",".5",".75","1")) +
+  facet_wrap(~Date,nrow=2) +
+  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
+  theme_bw() + 
+  theme(text=element_text(size=12)) +
+  ylim(c(0,1))
+ggsave("uscrs_roc_comparison.png", width = 7, height = 4, dpi = 300)
 ```
-
-
 
 
 ```{r}
