@@ -863,6 +863,16 @@ combined_df = combined_df %>%
             trimOuter) %>%
   group_by(BNP_NT_Pro_at_start) %>%
   mutate_at(vars(BNP_at_start),trimOuter) %>% ungroup
+trim_values = bind_rows(
+  combined_df %>%
+    summarise_at(vars(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,cpo_at_start,api_at_start,papi_at_start),.funs=c("min"=min,"max"=max)) %>%
+    pivot_longer(cols = everything(), 
+         names_to = c("var", ".value"), names_sep="_at_start_"),
+  combined_df %>%
+    group_by(BNP_NT_Pro_at_start) %>%
+    summarise_at(vars(BNP_at_start),.funs=c("min"=min,"max"=max)) %>%
+    mutate(var="BNP"))
+write.csv(trim_values,file="trim_values.csv",row.names=F)
 
 # fit base model w/ stabilized weights
 mortality_model_base = glm(
