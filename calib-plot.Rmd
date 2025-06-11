@@ -228,21 +228,23 @@ makeCalibData = function(data,q=10) {
 }
 calibdat = makeCalibData(joindat,20)
 
-
+library(ggforce)
 ggplot(calibdat,aes(x=exp,y=obs)) +
-  geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
-              linewidth=.5,alpha=.75) +
+  # geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
+  #             linewidth=.5,alpha=.75) +
   geom_abline(intercept=0,slope=1,color="darkgrey") +
-  geom_point() + 
   geom_errorbar(aes(ymin=lower,ymax=upper)) +
-  coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
-  # expand_limits(y=c(0,max(.2,max(calibdat$exp))),
-  #               x=c(0,max(.2,max(calibdat$exp))) +
-  # facet_grid(~factor(time,labels=c("1 week","1 month","6 months","1 year"))) +
+  geom_point(size=2,alpha=.8) + 
+  scale_x_continuous(limits=c(0,.15)) +
+  scale_y_continuous(limits=c(0,.15),
+                     oob = scales::rescale_none) +
+  # coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  facet_zoom(xlim=c(0,.05),ylim=c(0,.05),zoom.size=1,show.area=F) +  
   theme_bw() +
   theme(text=element_text(size=14)) +
   labs(y="Observed 6-week mortality probability",x="Expected 6-week mortality probability")
-ggsave("calib-overall.png",width=7.5,height=7.5)
+ggsave("calib-overall.png",width=8,height=4)
+
 
 # by status
 joindat = joindat %>% group_by(PX_ID,grp) %>% mutate(status_at_start=first(status)) %>% ungroup
