@@ -414,6 +414,7 @@ eighth_int = eighth_int %>%
 
 #full data for pooled roc
 eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
+save(eight_sets,file="eight-sets.Rdata")
 ```
 
 # Plot pooled ROC across nonoverlapping intervals of test set
@@ -574,8 +575,8 @@ calib <- Score(
   plots = "calibration"
 )
 plotCalibration(calib,
-                xlim=c(0,.05),ylim=c(0,.05),
-                method="quantile",cens.method="local",q=20,
+                xlim=c(0,.1),ylim=c(0,.1),
+                method="quantile",cens.method="local",q=10,
                 auc.in.legend=F,brier.in.legend=F)
 plotCalibration(calib,bars=T,ylim=c(0,.1),cens.method="local")
 ```

@@ -1,0 +1,216 @@
+---
+title: "Calibration plot"
+author: "Grace Lyden"
+date: "2025-06-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls())
+# base::load("mortality-model.RData")
+base::load("mortality_model_test_data.RData")
+
+library(dplyr)
+library(haven)
+library(survival)
+library(ggplot2)
+```
+
+## Set up test data with rows after delisting, by week
+```{r test}
+## Create week variable
+test_data = test_data %>% 
+  group_by(PX_ID) %>%
+  mutate(
+    week = row_number()
+  ) %>% relocate(week, .after = CAN_LISTING_CTR_CD) %>% ungroup
+
+
+# Adjust delisting time variables to censor at 6 weeks
+# Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
+# If candidates dies more than 4/5 weeks after delisting, they are censored
+test_data = test_data %>% group_by(PX_ID) %>% 
+  
+  mutate(
+    # if we have full follow-up for the week, follow for censoring (floor)
+    time_until_censor_after_delisting = 
+      case_when(row_number() == n() & !is.na(time_until_censor_after_delisting) ~ 
+                  floor(pmax(0,removal_time + time_until_censor_after_delisting - interval_stop)/7)*7,
+                T ~ NA),
+    # follow for death even w/o full week (ceiling)
+    time_until_death_after_delisting = 
+      case_when(row_number() == n() & !is.na(time_until_death_after_delisting) ~ 
+                  ceiling(pmax(0,removal_time + time_until_death_after_delisting - interval_stop)/7)*7,
+                T ~ NA)) %>%
+  
+  fill(time_until_censor_after_delisting,time_until_death_after_delisting,.direction="downup") %>%
+  
+  ## Note: This is intentionally different from mortality_model_data - 5 weeks regardless of even/odd
+  # censor at 6 weeks
+  ungroup() %>%
+  mutate(time_until_censor_after_delisting = case_when(
+    time_until_censor_after_delisting > 35  |
+      time_until_death_after_delisting > 35 ~ 35,
+    TRUE ~ time_until_censor_after_delisting
+  ),
+  # recode time to death as missing if censored
+  time_until_death_after_delisting = ifelse(!is.na(time_until_censor_after_delisting),NA,
+                                            time_until_death_after_delisting),
+  outcome = ifelse(!is.na(time_until_censor_after_delisting),0,outcome)
+  
+  )
+
+## Determine delisting row and # of duplicates we need after delisting, until death or censoring
+test_data = test_data %>% group_by(PX_ID) %>% mutate(
+  delisting = case_when(
+    (!is.na(time_until_death_after_delisting) | !is.na(time_until_censor_after_delisting)) & row_number() == n() ~ 1,
+    TRUE ~ 0)
+) %>% ungroup() %>% mutate(
+  duplicates_after_delisting = case_when(
+    delisting == 1 & time_until_death_after_delisting > 0 ~
+      time_until_death_after_delisting/7,
+    delisting == 1 & time_until_censor_after_delisting > 0 ~ 
+      time_until_censor_after_delisting/7,
+    TRUE ~ 0))
+
+## repeat rows for the duplicates after delisting
+# and recode interval_start, interval_stop
+test_data = test_data %>%
+  slice(rep(row_number(), duplicates_after_delisting+1)) %>%
+  group_by(PX_ID) %>%
+  mutate(week=row_number()) %>%
+  group_by(PX_ID,duplicates_after_delisting) %>%
+  mutate(dup=row_number()-1) %>%
+  ungroup() %>%
+  mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
+         current_date = as.Date(can_listing_dt) + interval_start,
+         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop),
+         status = if_else(dup>0 & delisting == 1, "off_waitlist", status)) %>%
+  select(-dup)
+
+# code outcome for last row - now outcome is correct
+test_data = test_data %>%
+  group_by(PX_ID) %>%
+  mutate(outcome = case_when(
+    row_number()==n() & outcome==1 ~ 1,
+    row_number()==n() & !is.na(time_until_death_after_delisting) & is.na(time_until_censor_after_delisting) ~ 1,
+    T ~ 0))
+table(test_data$outcome)
+table(test_data$outcome,test_data$CAN_REM_CD)
+
+## Adjust prob_no_tx variable after delisting
+# set prob_no_tx to 1 after delisting
+test_data = test_data %>%
+  group_by(PX_ID) %>%
+  mutate(delisting2 = cumsum(delisting),
+         prob_no_tx = ifelse(delisting2>1,1,prob_no_tx)) %>%
+  ungroup
+table(test_data$transplant,test_data$delisting) # quick check
+```
+
+## Join test data with 8 intervals
+Create start-stop data with up to 6 weeks follow-up for each PX_ID in each interval.
+
+```{r join}
+base::load("eight-sets.Rdata")
+nrow(eight_sets);eight_sets %>% distinct(PX_ID,current_date) %>% nrow
+nrow(test_data);test_data %>% distinct(PX_ID,current_date) %>% nrow
+joindat = left_join(test_data,
+          eight_sets %>%
+            select(PX_ID,current_date,contains("at_start"),prob_surv_6wk,prob_outcome_6wk) %>%
+            mutate(include=T),by=c("PX_ID","current_date"))
+
+# recode week
+joindat = joindat %>%
+  mutate(int_start = case_when(include ~ 1, T ~ 0)) %>%
+  group_by(PX_ID) %>%
+  mutate(
+    grp = cumsum(int_start)
+  ) %>%
+  group_by(PX_ID,grp) %>%
+  mutate(week_from_baseline = row_number()) %>%
+  ungroup() %>%
+  filter(week_from_baseline<=6,grp>0)
+joindat %>% select(PX_ID,grp,week_from_baseline,current_date,interval_start,interval_stop,outcome)
+table(joindat$include)
+nrow(eight_sets)
+summary(joindat$current_date[joindat$week_from_baseline==1])
+table(joindat$outcome)
+table(eight_sets$outcome)
+```
+
+## Calculate (unstabilized) weights
+```{r wts}
+# Create weight variable based on prob_no_tx
+joindat = joindat %>% group_by(PX_ID, grp) %>% mutate(
+  weight = 1/(cumprod(prob_no_tx))
+) %>% ungroup()
+
+# remove transplant weeks
+joindat = joindat %>% filter(transplant == 0)
+
+# look at weights
+with(joindat,tapply(weight,week_from_baseline,summary))
+
+## working
+## calculate numerator for stabilized weights
+## note: would have to pull "at_start" variables down
+# base::load("mortality-model.RData")
+# joindat = joindat %>% mutate(
+#   prob_no_tx_start = 1 - predict(tx_model_first, newdata = joindat, type = "response"),
+#   prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start))
+# 
+# # Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
+# joindat = joindat %>% group_by(PX_ID, grp) %>% mutate(
+#   sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+# ) %>% ungroup
+
+```
+
+
+## Make calibration plot
+```{r calib}
+makeCalibData = function(data,q=10) {
+  # group data into ntiles by expected risk
+  data1 = data %>% filter(week_from_baseline==1)
+  data1$risk_grp = ntile(data1$prob_outcome_6wk,n = q)
+  data = left_join(data,data1 %>% select(PX_ID,grp,risk_grp),by=c("PX_ID","grp"))
+  
+  # get average predicted risk in each ntile
+  df = data1 %>% group_by(risk_grp) %>% summarise(exp=mean(prob_outcome_6wk))
+  
+  # get observed risk in each ntile
+  obs_risks = lapply(1:q,function(i) {
+    ipw.surv = survfit(Surv(start,stop,outcome) ~ 1,
+                      data=data %>% filter(risk_grp==i) %>% 
+                        mutate(start=week_from_baseline-1,stop=week_from_baseline,id=interaction(PX_ID,grp)),
+                      type='kaplan-meier', weights=weight,
+                      cluster=id)
+    ipw.CI = summary(ipw.surv,times=6)[c("surv","lower","upper")]
+    # convert to mortality
+    mort.CI = lapply(ipw.CI,function(surv) {1-surv})
+    return(mort.CI)
+  })
+  obs_df = do.call(rbind.data.frame,obs_risks) %>%
+    rename(obs=surv,upper=lower,lower=upper)
+  output_df = cbind.data.frame(df,obs_df)
+  return(output_df)
+}
+calibdat = makeCalibData(joindat,20)
+
+
+ggplot(calibdat,aes(x=exp,y=obs)) +
+  # geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
+  #             linewidth=.5,alpha=.75) +
+  geom_point() + 
+  geom_errorbar(aes(ymin=lower,ymax=upper)) +
+  geom_abline(intercept=0,slope=1) +
+  coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  # expand_limits(y=c(0,max(.2,max(calibdat$exp))),
+  #               x=c(0,max(.2,max(calibdat$exp))) +
+  # facet_grid(~factor(time,labels=c("1 week","1 month","6 months","1 year"))) +
+  theme_bw() +
+  labs(y="Observed probability",x="Expected probability")
+```
