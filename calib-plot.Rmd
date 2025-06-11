@@ -119,7 +119,7 @@ nrow(eight_sets);eight_sets %>% distinct(PX_ID,current_date) %>% nrow
 nrow(test_data);test_data %>% distinct(PX_ID,current_date) %>% nrow
 joindat = left_join(test_data,
           eight_sets %>%
-            select(PX_ID,current_date,contains("at_start"),prob_surv_6wk,prob_outcome_6wk) %>%
+            select(PX_ID,current_date,prob_surv_6wk,prob_outcome_6wk) %>%
             mutate(include=T),by=c("PX_ID","current_date"))
 
 # recode week
@@ -154,18 +154,41 @@ joindat = joindat %>% filter(transplant == 0)
 # look at weights
 with(joindat,tapply(weight,week_from_baseline,summary))
 
-## working
-## calculate numerator for stabilized weights
-## note: would have to pull "at_start" variables down
-# base::load("mortality-model.RData")
-# joindat = joindat %>% mutate(
-#   prob_no_tx_start = 1 - predict(tx_model_first, newdata = joindat, type = "response"),
-#   prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start))
-# 
-# # Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
-# joindat = joindat %>% group_by(PX_ID, grp) %>% mutate(
-#   sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
-# ) %>% ungroup
+## calculate stabilized weights
+
+# get variables at start
+joindat = joindat %>% 
+  group_by(PX_ID,grp) %>% 
+  mutate(albumin_at_start = first(albumin),
+         bilirubin_at_start = first(bilirubin),
+         eGFR_at_start = first(eGFR),
+         sodium_at_start = first(sodium),
+         BNP_at_start = first(BNP),
+         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+         durable_LVAD_at_start = first(durable_LVAD),
+         short_mcs_ever_at_start = first(short_MCS_ever)) %>% 
+  ungroup
+
+# calculate numerator
+base::load("mortality-model.RData")
+joindat = joindat %>% mutate(
+  prob_no_tx_start = 1 - 
+    predict(tx_model_first, newdata = joindat, type = "response"),
+  prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start)) %>%
+  group_by(PX_ID, grp) %>% mutate(
+  sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+) %>% ungroup
+with(joindat,tapply(sweight,week_from_baseline,summary))
+
+# truncate weights
+joindat = joindat %>% group_by(week_from_baseline) %>% mutate(
+  tweight = ifelse(sweight > quantile(sweight,probs=.98,na.rm=T), 
+                   quantile(sweight,probs=.98,na.rm=T), sweight),
+  tweight = ifelse(sweight < quantile(sweight,probs=.02,na.rm=T), 
+                   quantile(sweight,probs=.02,na.rm=T), tweight)) %>%
+  ungroup
+with(joindat,tapply(tweight,week_from_baseline,summary))
+
 
 ```
 
@@ -179,16 +202,21 @@ makeCalibData = function(data,q=10) {
   data = left_join(data,data1 %>% select(PX_ID,grp,risk_grp),by=c("PX_ID","grp"))
   
   # get average predicted risk in each ntile
-  df = data1 %>% group_by(risk_grp) %>% summarise(exp=mean(prob_outcome_6wk))
+  df = data1 %>% group_by(risk_grp) %>% 
+    summarise(exp=mean(prob_outcome_6wk),
+              exp.05=quantile(prob_outcome_6wk,.25),
+              exp.95=quantile(prob_outcome_6wk,.75))
   
   # get observed risk in each ntile
   obs_risks = lapply(1:q,function(i) {
     ipw.surv = survfit(Surv(start,stop,outcome) ~ 1,
-                      data=data %>% filter(risk_grp==i) %>% 
-                        mutate(start=week_from_baseline-1,stop=week_from_baseline,id=interaction(PX_ID,grp)),
-                      type='kaplan-meier', weights=weight,
+                      data=data %>% filter(risk_grp==i) %>%
+                        mutate(start=week_from_baseline-1,
+                               stop=week_from_baseline,
+                               id=interaction(PX_ID,grp)),
+                      type='kaplan-meier', weights=sweight,
                       cluster=id)
-    ipw.CI = summary(ipw.surv,times=6)[c("surv","lower","upper")]
+    ipw.CI = summary(ipw.surv,times=6,extend=T)[c("surv","lower","upper")]
     # convert to mortality
     mort.CI = lapply(ipw.CI,function(surv) {1-surv})
     return(mort.CI)
@@ -202,15 +230,51 @@ calibdat = makeCalibData(joindat,20)
 
 
 ggplot(calibdat,aes(x=exp,y=obs)) +
-  # geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
-  #             linewidth=.5,alpha=.75) +
+  geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
+              linewidth=.5,alpha=.75) +
+  geom_abline(intercept=0,slope=1,color="darkgrey") +
   geom_point() + 
   geom_errorbar(aes(ymin=lower,ymax=upper)) +
-  geom_abline(intercept=0,slope=1) +
   coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
   # expand_limits(y=c(0,max(.2,max(calibdat$exp))),
   #               x=c(0,max(.2,max(calibdat$exp))) +
   # facet_grid(~factor(time,labels=c("1 week","1 month","6 months","1 year"))) +
   theme_bw() +
-  labs(y="Observed probability",x="Expected probability")
+  theme(text=element_text(size=14)) +
+  labs(y="Observed 6-week mortality probability",x="Expected 6-week mortality probability")
+ggsave("calib-overall.png",width=7.5,height=7.5)
+
+# by status
+joindat = joindat %>% group_by(PX_ID,grp) %>% mutate(status_at_start=first(status)) %>% ungroup
+table(joindat$status_at_start)
+table(joindat$status)
+
+# get overall observed and expected by status
+calib_status = lapply(1:6,function(i) {
+  makeCalibData(joindat %>% filter(status_at_start==i),q=1) %>%
+    mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
+})
+calib_status = do.call(rbind.data.frame,calib_status)
+
+# make bar plot by status
+calib_status_long = calib_status %>%
+  pivot_longer(cols = c(exp, obs), names_to = "type", values_to = "value") %>%
+  mutate(lower=ifelse(type=="exp",exp.05,lower),
+         upper=ifelse(type=="exp",exp.95,upper),
+         type_fact = factor(type,levels=c("exp","obs"),
+                            labels=c("Predicted\n(US-CRS 2.0)",
+                                     "Observed")))
+ggplot(calib_status_long,
+       aes(x = factor(status), y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.9),
+    width = 0.2
+  ) +
+  coord_cartesian(ylim=c(0,.4)) +
+  scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  labs(x = "Status", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14))
+ggsave("calib-by-status.png",width=7.5,height=6.5)
 ```
