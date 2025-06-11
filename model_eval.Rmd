@@ -5,12 +5,12 @@ date: "2024-07-15"
 ---
 
 ```{r setup, include=FALSE}
-#rm(list = ls())
-load("C:/Users/mhwhi/Downloads/mortality-model.RData")
-load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
+rm(list = ls())
+# load("C:/Users/mhwhi/Downloads/mortality-model.RData")
+# load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
 # Grace
-# base::load("mortality-model.RData")
-# base::load("mortality_model_test_data.RData")
+base::load("mortality-model.RData")
+base::load("mortality_model_test_data.RData")
 library(rms)
 library(tidyr)
 library(dplyr)
@@ -48,7 +48,7 @@ table(test_data$status)
 ```
 
 
-```{r}
+```{r,eval=F}
 #expanding out to follow up 6 week post delisting
 test_data = test_data %>% group_by(PX_ID) %>% 
   
@@ -508,8 +508,8 @@ pval_df$Date <- rep(dates, each = 3)
 
 
 ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
-  geom_point(position = position_dodge(width = 24),size=2) +
-  geom_line(position = position_dodge(width = 24),alpha=.85) +
+  geom_line(position = position_dodge(width = 24)) +
+  geom_point(position = position_dodge(width = 24),size=2.5) +
   geom_errorbar(position = position_dodge(width = 24),width=15) +
   labs(
     #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
@@ -525,10 +525,13 @@ ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model,
     # plot.title = element_text(size = 18),
     # axis.title.x = element_text(size = 16), 
     # axis.title.y = element_text(size = 16),
-    axis.text = element_text(size = 10),
-    legend.title = element_text(size = 14),
-    legend.text = element_text(size = 12),
-    axis.text.x = element_text(angle = 45, hjust = 1)
+    
+    # axis.text = element_text(size = 10),
+    # legend.title = element_text(size = 14),
+    # legend.text = element_text(size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    
+    text=element_text(size=14)
   ) +
   scale_y_continuous(limits = c(0,1)) +
   scale_x_continuous(
@@ -539,11 +542,11 @@ ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model,
   scale_color_viridis_d()
   # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
   # scale_linetype_manual(values = c("dashed","solid","solid"))
-ggsave("uscrs_auc_comparison.png", width = 6, height = 4, dpi = 300)
+ggsave("uscrs_auc_comparison.png", width = 6.5, height = 4, dpi = 300)
 
 # look for significant differences in AUC
-pval_df %>% filter(model=="waiting time + status",p<0.1)
-pval_df %>% filter(model=="status only",p<0.1)
+pval_df %>% filter(model=="waiting time + status",p<0.05)
+pval_df %>% filter(model=="status only",p<0.05)
 
 # make faceted ROC plots
 

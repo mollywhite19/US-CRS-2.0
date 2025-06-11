@@ -242,7 +242,7 @@ ggplot(calibdat,aes(x=exp,y=obs)) +
   facet_zoom(xlim=c(0,.05),ylim=c(0,.05),zoom.size=1,show.area=F) +  
   theme_bw() +
   theme(text=element_text(size=14)) +
-  labs(y="Observed 6-week mortality probability",x="Expected 6-week mortality probability")
+  labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
 ggsave("calib-overall.png",width=8,height=4)
 
 
