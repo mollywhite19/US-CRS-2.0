@@ -16,8 +16,57 @@ library(dplyr)
 library(haven)
 library(survival)
 library(ggplot2)
+library(splines)
+library(lubridate)
+library(tidyr)
 ```
 
+## Bring in justification form data for exceptions
+```{r excep}
+curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2403/thor/ThoracicRegistration"
+just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+just_form_hr_data_link = 
+  read_sas(here::here(curr_data_release, "JustFormHRDataLink.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+risk_strat_data_hr = 
+  read_sas(here::here(curr_data_release, "RiskStratDataHR.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+status_just_episode = 
+  read_sas(here::here(curr_data_release, "StatusJustEpisode.sas7bdat"), NULL) %>%
+  zap_formats() %>% zap_labels()
+
+# join everything
+justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
+                     just_form_hr_data_link %>% select(WlregAuditId,JustId),
+                     by="WlregAuditId") %>%
+  inner_join(.,
+             status_just_episode %>% select(JustId,BeginDate,EndDate),
+             by="JustId") %>%
+  inner_join(.,
+             just_form_hr %>% select(JustId,RequestedCandStatCd,Exception),
+             by="JustId") %>%
+  # EndDate is missing for people who were still at that status when data were pulled
+  mutate(EndDate = case_when(is.na(EndDate) ~ max(EndDate,na.rm=T),T ~ EndDate))
+head(justdat)
+```
+
+## Join justification data to test data if current_date between BeginDate and EndDate
+```{r joinjust}
+# keep justification forms for patients in study, on current_date (end of day)
+justdat_join = justdat %>% right_join(.,test_data %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>% mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct
+
+# join justification forms to test data
+test_data2 = test_data %>% rename(JustId_old=JustId,RequestedCandStatCd_old=RequestedCandStatCd,Exception_old=Exception) %>% left_join(.,justdat_join,by=c("PX_ID"="px_id","current_date"))
+
+## sanity checks
+nrow(test_data2);nrow(test_data)
+test_data2 %>% count(status,RequestedCandStatCd)
+test_data2 %>% count(status,Exception)
+
+# save test_data2 as test_data
+test_data=test_data2
+```
 ## Set up test data with rows after delisting, by week
 ```{r test}
 ## Create week variable
@@ -243,7 +292,7 @@ ggplot(calibdat,aes(x=exp,y=obs)) +
   theme_bw() +
   theme(text=element_text(size=14)) +
   labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
-ggsave("calib-overall.png",width=8,height=4)
+# ggsave("calib-overall.png",width=8,height=4)
 
 
 # by status
@@ -278,5 +327,46 @@ ggplot(calib_status_long,
   scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
   labs(x = "Status", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14))
-ggsave("calib-by-status.png",width=7.5,height=6.5)
+# ggsave("calib-by-status.png",width=7.5,height=6.5)
+```
+
+
+## Calibration by status and exception
+```{r excepplot}
+# get exception at start
+joindat = joindat %>% group_by(PX_ID,grp) %>% mutate(excep_at_start=first(Exception),excep_at_start=ifelse(is.na(excep_at_start),0,excep_at_start)) %>% ungroup
+joindat %>% count(status_at_start,excep_at_start)
+
+# get overall observed and expected by status
+levels = joindat %>% count(status_at_start,excep_at_start)
+calib_status = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(joindat %>% filter(status_at_start==i,excep_at_start==j),q=1) %>%
+    mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status = do.call(rbind.data.frame,calib_status)
+
+# make bar plot by status
+calib_status_long = calib_status %>%
+  pivot_longer(cols = c(exp, obs), names_to = "type", values_to = "value") %>%
+  mutate(lower=ifelse(type=="exp",exp.05,lower),
+         upper=ifelse(type=="exp",exp.95,upper),
+         type_fact = factor(type,levels=c("exp","obs"),
+                            labels=c("Predicted\n(US-CRS 2.0)",
+                                     "Observed")))
+ggplot(calib_status_long,
+       aes(x = factor(paste(status,exception,sep=".")), y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.9),
+    width = 0.2
+  ) +
+  coord_cartesian(ylim=c(0,.4)) +
+  scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14))
+ggsave("calib-by-excep.png",width=7.5,height=6.5)
 ```
