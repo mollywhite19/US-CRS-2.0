@@ -168,7 +168,7 @@ nrow(eight_sets);eight_sets %>% distinct(PX_ID,current_date) %>% nrow
 nrow(test_data);test_data %>% distinct(PX_ID,current_date) %>% nrow
 joindat = left_join(test_data,
           eight_sets %>%
-            select(PX_ID,current_date,prob_surv_6wk,prob_outcome_6wk) %>%
+            select(PX_ID,current_date,prob_surv_6wk,prob_outcome_6wk,uscrs,uscrs_trim) %>%
             mutate(include=T),by=c("PX_ID","current_date"))
 
 # recode week
@@ -244,17 +244,17 @@ with(joindat,tapply(tweight,week_from_baseline,summary))
 
 ## Make calibration plot
 ```{r calib}
-makeCalibData = function(data,q=10) {
+makeCalibData = function(data,q=10,risk_score="prob_outcome_6wk") {
   # group data into ntiles by expected risk
   data1 = data %>% filter(week_from_baseline==1)
-  data1$risk_grp = ntile(data1$prob_outcome_6wk,n = q)
+  data1$risk_grp = ntile(data1[[risk_score]],n = q)
   data = left_join(data,data1 %>% select(PX_ID,grp,risk_grp),by=c("PX_ID","grp"))
   
   # get average predicted risk in each ntile
   df = data1 %>% group_by(risk_grp) %>% 
-    summarise(exp=mean(prob_outcome_6wk),
-              exp.05=quantile(prob_outcome_6wk,.25),
-              exp.95=quantile(prob_outcome_6wk,.75))
+    summarise(exp=mean(!!sym(risk_score)),
+              exp.05=quantile(!!sym(risk_score),.25),
+              exp.95=quantile(!!sym(risk_score),.75))
   
   # get observed risk in each ntile
   obs_risks = lapply(1:q,function(i) {
@@ -276,6 +276,7 @@ makeCalibData = function(data,q=10) {
   return(output_df)
 }
 calibdat = makeCalibData(joindat,20)
+# calibdat1.0 = makeCalibData(joindat,20,"uscrs")
 
 library(ggforce)
 ggplot(calibdat,aes(x=exp,y=obs)) +
@@ -293,7 +294,6 @@ ggplot(calibdat,aes(x=exp,y=obs)) +
   theme(text=element_text(size=14)) +
   labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
 # ggsave("calib-overall.png",width=8,height=4)
-
 
 # by status
 joindat = joindat %>% group_by(PX_ID,grp) %>% mutate(status_at_start=first(status)) %>% ungroup

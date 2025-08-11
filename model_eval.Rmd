@@ -355,7 +355,22 @@ eighth_int = pred_data_fun(eighth_int) %>% mutate(
   pred_surv_6wk = as.vector(prob_surv_6wk)
 )
 
-second_int
+```
+
+# Calculate US-CRS 1.0 log odds
+```{r uscrs1}
+uscrs1 = function(albumin,bilirubin,eGFR,sodium,lvad,mcs,BNP,NTpro) {
+  return(-.656*albumin
+         +.617*log(bilirubin+1) 
+         -.012*eGFR
+         -.077*sodium
+         -.377*lvad
+         +1.092*mcs
+         +.433*log(BNP+1)*(NTpro==0)
+         +.224*log(BNP+1)*(NTpro==1)
+         )
+}
+
 ```
 
 # Flip rankings so that higher = higher risk
@@ -366,48 +381,64 @@ second_int
 first_int = first_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 second_int = second_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 third_int = third_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 fourth_int = fourth_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 fifth_int = fifth_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 sixth_int = sixth_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 seventh_int = seventh_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
 eighth_int = eighth_int %>%
   ungroup() %>% mutate(
   rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
   prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
@@ -478,7 +509,7 @@ roc_plot <- list()
 # Loop through datasets to compute AUC
 for (i in 1:length(datasets)) {
   auc_tmp <- Score(
-    list("uscrs" = datasets[[i]]$prob_outcome_6wk, "waiting time + status" = datasets[[i]]$rank, "status only" = datasets[[i]]$status_flipped),
+    list("uscrs" = datasets[[i]]$prob_outcome_6wk, "waiting time + status" = datasets[[i]]$rank, "status only" = datasets[[i]]$status_flipped, "uscrs 1.0" = datasets[[i]]$uscrs),
     formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
               eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
               durable_LVAD + short_MCS_ever + status,
@@ -498,13 +529,13 @@ for (i in 1:length(datasets)) {
 }
 pval_df <- do.call(rbind.data.frame,p_val)
 auc_df <- bind_rows(auc_results) %>%
-  mutate(Model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time")))
+  mutate(Model=factor(model,levels=c("uscrs 1.0","uscrs","status only","waiting time + status"),labels=c("US-CRS 1.0","US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time")))
 # auc_df$Model = ifelse(auc_df$model == "uscrs", "US-CRS 2.0", "Status Quo")
 roc_df <- do.call(rbind.data.frame,roc_plot)
 
 # add dates
-auc_df$Date <- rep(dates, each = 3)
-pval_df$Date <- rep(dates, each = 3)
+auc_df$Date <- rep(dates, each = 4) # each = 3
+pval_df$Date <- rep(dates, each = 6) # each = 3
 
 
 ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
@@ -547,10 +578,11 @@ ggsave("uscrs_auc_comparison.png", width = 6.5, height = 4, dpi = 300)
 # look for significant differences in AUC
 pval_df %>% filter(model=="waiting time + status",p<0.05)
 pval_df %>% filter(model=="status only",p<0.05)
+pval_df %>% filter(p<0.05)
 
 # make faceted ROC plots
 
-roc_df = roc_df %>% mutate(Model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time")))
+roc_df = roc_df %>% filter(model %in% c("uscrs","status only","waiting time + status")) %>% mutate(Model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time")))
 ggplot(roc_df, 
        aes(x = FPR, y = TPR, color = Model)) +
   geom_line(linewidth=.95,alpha=.85) +
