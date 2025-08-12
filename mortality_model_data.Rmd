@@ -17,6 +17,7 @@ library(ggplot2)
 library(rms)
 library(survey) # for svydesign and svyCreateTableOne
 library(tableone) # for CreateTableOne
+library(haven)
 
 ### fix death to be pretransplant only and just one row ###
 
@@ -69,6 +70,91 @@ The `df_final` dataset contains listings through 11/15/2023 and updates through 
 summary(df_final$can_listing_dt)
 summary(df_final$current_date)
 ```
+
+## Bring in justification form data
+```{r excep}
+curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2403/thor/ThoracicRegistration"
+just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+just_form_hr_data_link = 
+  read_sas(here::here(curr_data_release, "JustFormHRDataLink.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+risk_strat_data_hr = 
+  read_sas(here::here(curr_data_release, "RiskStratDataHR.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+status_just_episode = 
+  read_sas(here::here(curr_data_release, "StatusJustEpisode.sas7bdat"), NULL) %>%
+  zap_formats() %>% zap_labels()
+just_form_hr_stat1 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat1.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+just_form_hr_stat2 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat2.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+just_form_hr_stat3 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat3.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+just_form_hr_stat4 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat4.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+thor_support_device = 
+    read_sas(here::here(curr_data_release, "ThorSupportDevice.sas7bdat"), NULL) %>% 
+    zap_formats() %>% zap_labels()
+
+# join everything
+justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
+                     just_form_hr_data_link %>% select(WlregAuditId,JustId),
+                     by="WlregAuditId") %>%
+  inner_join(.,
+             status_just_episode %>% select(JustId,BeginDate,EndDate),
+             by="JustId") %>%
+  inner_join(.,
+             just_form_hr %>% select(JustId,RequestedCandStatCd,Exception,ThorSupportDevicePrimary,ThorSupportDeviceSecondary),
+             by="JustId") %>%
+  left_join(.,
+             just_form_hr_stat2 %>% select(JustId,CriteriaIabpSupport),
+             by="JustId") %>%
+  left_join(.,thor_support_device %>% select(DeviceId,VadBrandId,TahBrandId,PercuBrandId,VentricularSupportId,ImplantDt),
+            by=c("ThorSupportDevicePrimary"="DeviceId")) %>%
+  mutate(BrandId = coalesce(VadBrandId,TahBrandId,PercuBrandId)) %>%
+  # EndDate is missing for people who were still at that status when data were pulled
+  mutate(EndDate = case_when(is.na(EndDate) ~ max(EndDate,na.rm=T),T ~ EndDate))
+
+# keep justification forms for patients in study, on current_date (end of day)
+justdat_join = justdat %>% right_join(.,df_final %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>%
+  mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% 
+  filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct
+
+# join justification forms to df_final
+names(justdat_join)[names(justdat_join) %in% names(df_final)]
+df_final2 = df_final %>% rename(JustId_old=JustId,RequestedCandStatCd_old=RequestedCandStatCd,Exception_old=Exception) %>%
+  left_join(.,justdat_join,by=c("PX_ID"="px_id","current_date"))
+
+## sanity checks
+nrow(df_final2);nrow(df_final)
+df_final2 %>% count(status,RequestedCandStatCd)
+df_final2 %>% count(status,Exception)
+
+# save df_final2 as df_final
+df_final=df_final2
+rm(df_final2)
+
+```
+
+# Calculate balloon pump and impella variables
+```{r iabp}
+df_final %>% count(status,CriteriaIabpSupport)
+# 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
+df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status,BrandId)
+df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status_criteria) # remember status_criteria can be missing
+df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(CriteriaIabpSupport) # no overlap bw IABP and Impella
+
+# should IABP and impella be memory variables or currently qualifying?
+df_final = df_final %>%
+  mutate(iabp = )
+
+```
+
 
 # Fit transplant models for IPW
 The denominator of the inverse probability weights is a function of the time-varying probability of transplant. We estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the entire discrete-time dataset from listing to removal and allowing patient characteristics to update at the beginning of each week. (Note: The training/test split is designed to hold out mortality information in particular, which was not used in this step.)
