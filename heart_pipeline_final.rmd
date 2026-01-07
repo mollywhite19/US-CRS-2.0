@@ -2,6 +2,8 @@
 title: "heart pipeline test"
 output: html_document
 date: "2024-05-09"
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Setup
@@ -28,7 +30,10 @@ library(labelled)
 library(pacman)
 library(stringr)
 
-here::i_am("heart_data_pipeline.Rmd")
+grace = T
+if (!grace) {
+  here::i_am("heart_data_pipeline.Rmd")
+}
 
 RData_file_loaded = FALSE
 ```
@@ -40,9 +45,10 @@ RData_file_loaded = FALSE
 
 ```{r load data}
 
+if (!grace) {
+
 # change this variable to load in a different release of the SAF
 curr_data_release = "pubsaf2403"
-# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
 
 if (RData_file_loaded == FALSE) {
   start_time = Sys.time()
@@ -126,6 +132,77 @@ if (RData_file_loaded == FALSE) {
   # load(here::here(raw_data_filename))
 }
 
+} else {
+  
+  curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor"
+
+  cand_thor = read_sas(here::here(curr_data_release, "cand.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  tx_hr = read_sas(here::here(curr_data_release, "tx_hr.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  stathist_thor = 
+    read_sas(here::here(curr_data_release, "stathist.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  stat_just_hr1a = read_sas(here::here(curr_data_release, "statjust_hr1a.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  stat_just_hr1b = read_sas(here::here(curr_data_release, "statjust_hr1b.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  curr_data_release = file.path(curr_data_release,"ThoracicRegistration")
+  
+  just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  just_form_hr_data_link = 
+    read_sas(here::here(curr_data_release, "JustFormHRDataLink.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  just_form_hr_stat1 = 
+    read_sas(here::here(curr_data_release, "JustFormHRStat1.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  just_form_hr_stat2 = 
+    read_sas(here::here(curr_data_release, "JustFormHRStat2.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  just_form_hr_stat3 = 
+    read_sas(here::here(curr_data_release, "JustFormHRStat3.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  just_form_hr_stat4 = 
+    read_sas(here::here(curr_data_release, "JustFormHRStat4.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  risk_strat_data_hr = 
+    read_sas(here::here(curr_data_release, "RiskStratDataHR.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  status_just_episode = 
+    read_sas(here::here(curr_data_release, "StatusJustEpisode.sas7bdat"), NULL) %>%
+    zap_formats() %>% zap_labels()
+  
+  thor_support_device = 
+    read_sas(here::here(curr_data_release, "ThorSupportDevice.sas7bdat"), NULL) %>% 
+    zap_formats() %>% zap_labels()
+  
+  column_descriptions = 
+    read_sas(here::here(curr_data_release, "ColumnDescriptions.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+  table_descriptions = 
+    read_sas(here::here(curr_data_release, "TableDescriptions.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+  
+}
+
+
+
+
+
 ```
 
 
@@ -160,12 +237,12 @@ risk_strat_data_hr = risk_strat_data_hr %>%
   select(-(ends_with("Perf"))) %>%
   relocate(ChangeDt:PX_ID)
 
-# how does ChangeDate compare with BeginDate and EndDate?
-tmp = risk_strat_data_hr %>% select(ChangeDt,JustId) %>%
-  left_join(status_just_episode,by="JustId")
-head(tmp)
-# form is submitted before it goes into effect, so ChangeDt always before BeginDate
-with(tmp,summary(as.numeric(ChangeDt-BeginDate,units="days")))
+# # how does ChangeDate compare with BeginDate and EndDate?
+# tmp = risk_strat_data_hr %>% select(ChangeDt,JustId) %>%
+#   left_join(status_just_episode,by="JustId")
+# head(tmp)
+# # form is submitted before it goes into effect, so ChangeDt always before BeginDate
+# with(tmp,summary(as.numeric(ChangeDt-BeginDate,units="days")))
 
 # right_join to filter out erroneous forms from data link, as above
 just_form_hr_data_link = just_form_hr_data_link %>%
@@ -253,7 +330,7 @@ lvads_earliest = lvads %>% group_by(PX_ID) %>% mutate(
 
 # change these variables to customize inclusion criteria
 filter_date_start = mdy("01-01-2019")
-filter_date_end = mdy("11-15-2023")
+filter_date_end = mdy("11-15-2025")
 include_multi_organ_recipients = TRUE
 
 # See code chunk #7 if using pre-policy data
@@ -266,7 +343,7 @@ missingness_threshold = 1
 # filter candidates based on inclusion/exclusion criteria 
 cand_list = cand_thor %>% 
   
-  # Remove recipients listed prior to policy change
+  # Filter to candidates listed during prevalent window
   filter(is.na(CAN_REM_DT) | CAN_REM_DT  >= filter_date_start) %>%
   filter(CAN_LISTING_DT <= filter_date_end) %>%
   
@@ -324,11 +401,17 @@ just_stat3 = just_form_hr_stat3 %>% filter(PX_ID %in% cand_list$PX_ID)
 # filter Status 4 justification forms
 just_stat4 = just_form_hr_stat4 %>% filter(PX_ID %in% cand_list$PX_ID)
 
-save(cand_thor, file = "cand_thor.RData")
-rm(cand_thor, tx_hr, risk_strat_data_hr, stathist_thor, just_form_hr,
-   stat_just_hr1a, stat_just_hr1b, just_form_hr_stat1, just_form_hr_stat2,
-   just_form_hr_stat3, just_form_hr_stat4, thor_support_device,
-   status_just_episode, just_form_hr_data_link)
+if (!grace) {
+  save(cand_thor, file = "cand_thor.RData")
+  rm(cand_thor, tx_hr, risk_strat_data_hr, stathist_thor, just_form_hr,
+     stat_just_hr1a, stat_just_hr1b, just_form_hr_stat1, just_form_hr_stat2,
+     just_form_hr_stat3, just_form_hr_stat4, thor_support_device,
+     status_just_episode, just_form_hr_data_link)
+} else {
+  rm(risk_strat_data_hr, stathist_thor, just_form_hr,
+     stat_just_hr1a, stat_just_hr1b, just_form_hr_stat1, just_form_hr_stat2,
+     just_form_hr_stat3, just_form_hr_stat4)
+}
 
 gc()
 ```
@@ -1038,7 +1121,7 @@ full_list = full_list %>%
   # arranges dataset for easy viewing
   arrange(PX_ID, unique_date) %>%
   ungroup()
-
+gc()
 ```
 
 # Method to filter full_list to exclude unwanted timepoints
@@ -1200,14 +1283,15 @@ df = df %>%
   ungroup() %>% 
   relocate(t_start, t_stop, .after = unique_date)
 
+if (!grace) {
+  rdata_filename =  paste0("cont_time_series_", curr_data_release, ".RData")
 
-rdata_filename =  paste0("cont_time_series_", curr_data_release, ".RData")
-
-csv_filename =  paste0("cont_time_series_", curr_data_release, ".csv")
-
-save(df,file="cont_time_series_2403.Rdata")
-# save(df, file = here(curr_data_release, rdata_filename))
-# write_csv(df, file = here(curr_data_release, csv_filename))
+  csv_filename =  paste0("cont_time_series_", curr_data_release, ".csv")
+  
+  save(df,file="cont_time_series_2403.Rdata")
+  # save(df, file = here(curr_data_release, rdata_filename))
+  # write_csv(df, file = here(curr_data_release, csv_filename))
+}
 
 # repeat process for full_list
 # full_list = full_list %>% group_by(PX_ID) %>% 
@@ -1290,6 +1374,34 @@ df = df %>% arrange(PX_ID, unique_date) %>%
 df = df %>% filter(is.na(death_date_max) | death_date_max >= filter_date_start)
 ```
 
+# SRTR internal only: Look at ESRD and restricted deaths
+```{r}
+if (grace) {
+  df = left_join(df,cand_thor %>% select(PX_ID,PERS_ESRD_DEATH_DT,PERS_RESTRICT_DEATH_DT,PERS_RESTRICT_DEATH_VRFY),by="PX_ID")
+  
+  # look for people missing death date from other sources who have an ESRD or restricted death date within 6 weeks of removal (not for deterioration)
+  df %>% distinct(PX_ID) %>% nrow # 35138 candidates
+  df %>% 
+    filter(is.na(death_date_max),CAN_REM_CD!=13,
+           !is.na(PERS_ESRD_DEATH_DT) | !is.na(PERS_RESTRICT_DEATH_DT)) %>%
+    distinct(PX_ID) %>% nrow # 66 candidates have an ESRD or restricted death date, with no other death date
+  df %>% 
+    filter(is.na(death_date_max),CAN_REM_CD!=13,
+           !is.na(PERS_ESRD_DEATH_DT) | !is.na(PERS_RESTRICT_DEATH_DT)) %>%
+    distinct(PX_ID,PERS_ESRD_DEATH_DT,PERS_RESTRICT_DEATH_DT) %>% 
+    count(is.na(PERS_ESRD_DEATH_DT),is.na(PERS_RESTRICT_DEATH_DT)) # all restricted
+  df %>% 
+    filter(is.na(death_date_max),CAN_REM_CD!=13,
+           !is.na(PERS_ESRD_DEATH_DT) | !is.na(PERS_RESTRICT_DEATH_DT)) %>%
+    filter(pmin(PERS_ESRD_DEATH_DT,PERS_RESTRICT_DEATH_DT,na.rm=T)-removal_date <= weeks(6) | is.na(removal_date)) %>%
+    distinct(PX_ID) %>% nrow # only 6 were within 6 weeks of removal
+  
+  # remove the new variables; no need
+  df = df %>%
+    select(-PERS_ESRD_DEATH_DT,-PERS_RESTRICT_DEATH_DT,-PERS_RESTRICT_DEATH_VRFY)
+}
+```
+
 # Add transplant indicator based on a REC_TX event
 ```{r, warning=F, comment=NA, message=F}
 df$transplant = 0
@@ -1324,6 +1436,7 @@ df %>%
 
 
 df = df %>%
+  ungroup() %>%
   select(-c(
     
     ExtInoSingleDose, ExtInoMultiDose, 
@@ -1353,9 +1466,12 @@ df = df %>%
 ```{r, warning=F, comment=NA, message=F}
 
 paste0('Number of Patients: ', length(unique(df$PX_ID)))
+# "Number of Patients: 35138"
 paste0('Number Transplanted: ', length(unique(df$PX_ID[df$transplant == 1])))
+# "Number Transplanted: 24972"
 paste0('Percent Transplanted: ', 
        round(100 * (length(unique(df$PX_ID[df$transplant == 1])) / length(unique(df$PX_ID))), 2))
+# "Percent Transplanted: 71.07"
 
 ```
 
@@ -1379,11 +1495,11 @@ df %>% ungroup() %>% filter(grepl("CAN_REM_DT",unique_event),transplant==0,t_sta
   select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome)
 
 # note: these delistings are always the last row
-df %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start==t_stop & row_number()!=n())) %>% nrow()
+df %>% group_by(PX_ID) %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start==t_stop & row_number()!=n())) %>% nrow()
 
 # what's going on with rows after delisting when there was no death?
 ## conclusion: just data byproducts, eg ChangeDt after removal
-df %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start!=t_stop & outcome!=1),t_start>=removal_time) %>%
+df %>% group_by(PX_ID) %>% filter(any(grepl("CAN_REM_DT", unique_event) & transplant==0 & t_start!=t_stop & outcome!=1),t_start>=removal_time) %>%
   select(PX_ID,unique_event,unique_date,t_start,t_stop,transplant,outcome,removal_time,death_time)
 
 # how many PX_IDs?
@@ -1403,7 +1519,7 @@ tmp1 = df %>% filter(transplant <= 1 & t_start != t_stop) %>%
   ungroup()
 
 # instead, keep rows that correspond to a transplant or delisting (not for death or tx) even if t_start=t_stop
-tmp2 = df %>% filter(transplant <= 1 &
+tmp2 = df %>% group_by(PX_ID) %>% filter(transplant <= 1 &
                       ((t_start==t_stop & transplant==1) |
                          (t_start==t_stop & grepl("CAN_REM_DT",unique_event) & transplant==0 & outcome==0) |
                          (t_start!=t_stop) |
@@ -1494,7 +1610,7 @@ df = df %>% group_by(PX_ID) %>% fill(status_for_lvad, .direction = "down")
 ## Diagnosis, diabetes, and dialysis
 
 
-df = df %>% mutate(
+df = df %>% ungroup() %>% mutate(
   diagnosis = case_when(
     CAN_DGN >= 1000 & CAN_DGN <= 1049 & CAN_DGN != 1007 ~ 'Dilated_CM',
     CAN_DGN >= 1050 & CAN_DGN <= 1099 & CAN_DGN != 1051 ~ 'Restricted',
