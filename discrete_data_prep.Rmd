@@ -1,7 +1,9 @@
 ---
 title: "Create 1-week discrete-time dataset"
 output: html_document
-date: "2024-06-06"
+date: "2026-01-07"
+editor_options: 
+  chunk_output_type: console
 ---
 
 ## Load data and necessary libraries
@@ -10,16 +12,19 @@ date: "2024-06-06"
 rm(list = ls())
 gc()
 knitr::opts_chunk$set(echo = TRUE)
-# Molly:
-load("C:/Users/mhwhi/Downloads/heart_post_policy.RData")
-df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat', col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
 
-# Grace:
-# load("heart_post_policy.RData")
-# groups(df)
-# curr_data_release = "//srtr-fs-p01/SAF/External/Pub_SAF/saf2403_Q1/pubsaf2403"
-# df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand_thor.sas7bdat'),
-#                                 col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
+grace=T
+if (!grace) {
+  # Molly:
+  load("C:/Users/mhwhi/Downloads/heart_post_policy.RData")
+  df_cand_thor <- haven::read_sas('C:/Users/mhwhi/Downloads/pubsaf2403/cand_thor.sas7bdat', col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
+} else {
+  load("heart_post_policy.RData")
+  groups(df)
+  curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor"
+  df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand.sas7bdat'),
+                                  col_select=c(PX_ID, CAN_GENDER, CAN_RACE, CAN_HGT_CM, CAN_WGT_KG, CAN_ECMO))
+}
 
 library(renv)
 library(dplyr)
@@ -29,12 +34,20 @@ library(table1)
 library(purrr)
 library(ggplot2)
 
+### Cohort dates ###
+# Train: 1/1/19-6/30/23 (censor on 8/15/23)
+# Validation: 9/1/23-8/31/24
+# Test: 9/1/24-8/31/25
+
 # Set cohort dates and censoring dates
-censor_date_end = mdy("12-31-2023")
-censor_date_train = mdy("11-15-2022")
+censor_date_end = mdy("8-31-2025")
+censor_date_train = mdy("6-30-2023") # max current_date in training
 filter_date_start = mdy("01-01-2019")
-filter_date_end_train = mdy("10-01-2022")
-test_date_start = mdy("1-1-2023")
+filter_date_end_train = mdy("5-15-2023") # max listing_date in training
+test_date_start = mdy("9-1-2023")
+test2_date_start = mdy("9-1-2024")
+
+# All 1-week intervals that began between 1/1/2019 and 6/30/2023, for candidates listed by 5/15/2023, were retained in the model training data, while all other 1-week intervals were held out for model assessment (validation and test).
 
 # Retain listing date, transplant date for waiting time calculations
 df = df %>% mutate(can_listing_dt = if_else(grepl("CAN_LISTING_DT", unique_event), unique_date, NA),
@@ -74,7 +87,7 @@ df = df %>% group_by(PX_ID) %>%
 #   head(20)
 ```
 
-## Make composite outcome (death or deterioration) and censor candidates on December 31st, 2023
+## Make composite outcome (death or deterioration) and censor candidates on August 31, 2025 (Dec 2025 SAF)
 ```{r}
 df = df  %>% 
   filter(unique_date <= censor_date_end) %>% 
@@ -94,10 +107,10 @@ df = df  %>%
 table(df$t_stop >= df$t_start)
 
 # some numbers
-dim(table(df$PX_ID)) # 24531
-table(df$transplant) # 16963  
-table(df$outcome) # 2560
-df %>% filter(outcome==1,!any_tx) %>% nrow() # 2560 pretx deaths
+dim(table(df$PX_ID)) # 34001
+table(df$transplant) # 23960  
+table(df$outcome) # 3460
+df %>% filter(outcome==1,!any_tx) %>% nrow() # 3460 pretx deaths
 
 
 ```
@@ -193,10 +206,10 @@ df = df %>%
   mutate(t_stop = ifelse(grepl("CAN_REM_DT",unique_event),1,t_stop))
 
 # count up transplants, deaths
-dim(table(df$PX_ID)) # 24531
-nrow(df_tx) # 16963
-dim(table(df_tx$PX_ID)) # 16963
-df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2560
+dim(table(df$PX_ID)) # 34001
+nrow(df_tx) # 23960
+dim(table(df_tx$PX_ID)) # 23960
+df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 3460
 
 # # look at people with t_start = t_stop
 # df %>% filter(t_start==t_stop) %>%
@@ -213,7 +226,7 @@ df %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinc
 df = df %>%
   mutate(t_stop=ifelse(t_stop==0,1,t_stop)) %>%
   filter(t_start!=t_stop)
-dim(table(df$PX_ID)) # 24531
+dim(table(df$PX_ID)) # 34001
 
 # # IMPORTANT
 # # some rows after removal_time?? Be careful with last_active_date / last_inactive_date. The max is not the last day waiting.
@@ -250,7 +263,7 @@ df_final = df %>% mutate(
   ungroup()
 
 # count deaths
-df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 2560
+df_final %>% filter(!is.na(time_until_death_after_delisting) | outcome==1) %>% distinct(PX_ID) %>% nrow() # 3460
 ```
 
 ## Add dates back into discrete dataset
@@ -281,8 +294,8 @@ df_final = df_final %>% group_by(PX_ID) %>%
   select(-c(t_start, t_stop, period)) %>% # , unique_event, unique_date
   relocate(interval_start, interval_stop, .after=CAN_LISTING_CTR_CD) %>%
   ungroup
-table(df_final$transplant) # 16963 
-length(tx_patients) # 16963 
+table(df_final$transplant) # 23960 
+length(tx_patients) # 23960 
 
 # confirm no rows after transplant
 df_final %>% filter(transplant==1,is.na(transplant_time)) # always have a transplant_time
@@ -291,12 +304,12 @@ df_final %>% # transplant_time never before current interval
   select(PX_ID,current_date,can_listing_dt,removal_time,interval_start,interval_stop,unique_date,unique_event)
 ```
 
-## Create train/test split on 1/1/2023
-For tables on missingness, subset discrete dataset to all weeks that started on or after 1/1/2019. Then separate into training and test sets, with training follow-up through 11/15/2022 for all candidates listed by 10/01/2022.
+## Create train/test split on 6/30/2023
+For tables on missingness, subset discrete dataset to all weeks that started on or after 1/1/2019. Then separate into training and test sets, with training follow-up through 6/30/2023 for all candidates listed by 5/15/2023.
 ```{r}
 # check number of transplants, px_id
-table(df_final$transplant) # 16963 
-dim(table(df_final$PX_ID)) # 24531
+table(df_final$transplant) # 23960  
+dim(table(df_final$PX_ID)) # 34001
 
 # reduce data to cohort, create train/testing split
 df_final = df_final %>% 
@@ -308,8 +321,8 @@ df_final = df_final %>%
   )
 
 # check number of transplants, px_id - lost some
-table(df_final$transplant) # 16931  
-dim(table(df_final$PX_ID)) # 24487
+table(df_final$transplant) # 23928   
+dim(table(df_final$PX_ID)) # 33961
 
 # check that it worked
 with(df_final,tapply(current_date,train_test_split,summary))
@@ -321,11 +334,11 @@ df_final %>% group_by(PX_ID,train_test_split) %>%
   with(.,tapply(rown,train_test_split,summary))
 # $test
 #    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
-#    1.00   27.00   50.00   42.08   59.00   65.00 
+#    1.00   33.00   68.00   67.13  110.00  120.00 
 # 
 # $train
 #    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
-#     1.0    48.0    94.0   101.1   153.0   203.0 
+#     1.0    49.0    99.0   108.2   160.0   235.0 
 ```
 
 # Missing data and out-of-range values
@@ -520,13 +533,22 @@ But out-of-bound values have been recoded as missing.
 ```{r}
 ## before imputation
 
-# restrict test set to rows beginning 1/1/23 or later
+### supplemental table of time-varying data w/ missingness ###
+
+# restrict test set to rows beginning 9/1/23 or later
 with(df_final_preImpute,tapply(current_date,train_test_split,summary))
 table_data = df_final_preImpute %>%
   filter(train_test_split %in% "train" | current_date >= test_date_start) %>%
-  mutate(short_MCS_ever = 
+  mutate(
+    train_v_test_split = case_when(
+        current_date >= test2_date_start ~ "test",
+        train_test_split %in% "test" ~ "validation",
+        T ~ "train"),
+    short_MCS_ever = 
          case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' | CAN_ECMO %in% 1 ~ 1,
-           TRUE ~ 0))
+           TRUE ~ 0),
+    train_test_split = train_v_test_split
+    )
 with(table_data,tapply(current_date,train_test_split,summary))
 
 # relabel variables
@@ -560,20 +582,21 @@ table_data$durable_LVAD = factor(table_data$durable_LVAD)
 label(table_data$durable_LVAD) = "Ever on durable LVAD"
 table_data$short_MCS_ever = factor(table_data$short_MCS_ever)
 label(table_data$short_MCS_ever) = "Ever on short-term MCS"
-table_data$train_test_split_label = factor(table_data$train_test_split,levels=c("train","test"),labels=c("Training","Test"))
-table1(~ albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + short_MCS_ever + out_of_range_flag | train_test_split_label, data=table_data) # very low percent missing except w/ BNP
+table_data$train_test_split_label = factor(table_data$train_test_split,levels=c("train","validation","test"),labels=c("Training","Validation","Test"))
+table1(~ albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + short_MCS_ever + out_of_range_flag | train_test_split_label, overall=F, data=table_data) # very low percent missing except w/ BNP
 
 # summary of number of candidates
 table_data %>%
-  distinct(PX_ID) %>% nrow # 23889
+  distinct(PX_ID) %>% nrow # 33097
 table_data %>%
   distinct(PX_ID,train_test_split) %>%
   count(train_test_split) %>%
   mutate(prop=n/dim(table(table_data$PX_ID)))
-#   train_test_split     n  prop
-#   <fct>            <int> <dbl>
-# 1 test              8052 0.329
-# 2 train            18877 0.771
+# train_test_split     n  prop
+#   <chr>            <int> <dbl>
+# 1 test              8256 0.249
+# 2 train            21859 0.660
+# 3 validation        7897 0.239
 
 # summary of number of rows per candidate
 table_data %>% group_by(PX_ID,train_test_split) %>%
@@ -586,11 +609,13 @@ table_data %>% group_by(PX_ID) %>%
     ungroup %>%
     pull(rown) %>% sd #summary  
 
+### table 1 ###
+
 ## static data
 static_table = bind_rows(
   table_data %>% group_by(PX_ID,train_test_split) %>% slice(1),
   table_data %>% group_by(PX_ID) %>% slice(1) %>% mutate(train_test_split = "Overall"))
-static_table$train_test_split_label = factor(static_table$train_test_split,levels=c("train","test","Overall"),labels=c("Training","Test","Overall"))
+static_table$train_test_split_label = factor(static_table$train_test_split,levels=c("train","validation","test","Overall"),labels=c("Training","Validation","Test","Overall"))
 label(static_table$age_at_listing) = "Age at listing"
 units(static_table$age_at_listing) = "years"
 label(static_table$CAN_GENDER) = "Birth sex"
@@ -606,10 +631,14 @@ table1(~ age_at_listing + CAN_GENDER + status_label + durable_LVAD + short_MCS_e
        data=static_table, overall = F)
 
 
-
-## after imputation - supplement
+## after imputation - could be for supplement
 table_data = df_final %>% 
-  filter(train_test_split %in% "train" | current_date >= test_date_start)
+  filter(train_test_split %in% "train" | current_date >= test_date_start) %>%
+  mutate(train_v_test_split = case_when(
+    current_date >= test2_date_start ~ "test",
+    train_test_split %in% "test" ~ "validation",
+    T ~ "train"
+  ))
 label(table_data$albumin) = "Albumin"
 units(table_data$albumin) = "g/dL"
 label(table_data$bilirubin) = "Bilirubin"
@@ -640,7 +669,7 @@ table_data$durable_LVAD = factor(table_data$durable_LVAD)
 label(table_data$durable_LVAD) = "Ever on durable LVAD"
 table_data$short_MCS_ever = factor(table_data$short_MCS_ever)
 label(table_data$short_MCS_ever) = "Ever on short-term MCS"
-table_data$train_test_split_label = factor(table_data$train_test_split,levels=c("train","test"),labels=c("Training","Test"))
+table_data$train_test_split_label = factor(table_data$train_v_test_split,levels=c("train","validation","test"),labels=c("Training","Validation","Test"))
 table1(~ albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + short_MCS_ever + out_of_range_flag | train_test_split_label, data=table_data)
 ```
 
@@ -821,8 +850,8 @@ df_final  %>% filter(durable_LVAD == 1) %>% select(durable_lvad_implant_dt, curr
 ## Save discrete time data
 ```{r}
 # check numbers
-dim(table(df_final$PX_ID)) # 24487
-table(df_final$transplant) # 16931
+dim(table(df_final$PX_ID)) # 33961
+table(df_final$transplant) # 23928 
 
 # save dataset
 save("df_final", file =  "discrete_final_data.RData")
