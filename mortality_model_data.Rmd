@@ -2,14 +2,16 @@
 title: "mortality_model_dataset"
 output: html_document
 date: "2024-06-24"
+editor_options: 
+  chunk_output_type: console
 ---
 
 ## Load data and libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-rm(list=ls())
+# rm(list=ls())
 load("discrete_final_data.RData") # df_final - created in discrete_data_prep.Rmd
-load("df_intervals_setup.RData") # df_intervals - US-CRS 1.0
+# load("df_intervals_setup.RData") # df_intervals - US-CRS 1.0
 library(dplyr)
 library(splines)
 library(tidyr)
@@ -18,6 +20,8 @@ library(rms)
 library(survey) # for svydesign and svyCreateTableOne
 library(tableone) # for CreateTableOne
 library(haven)
+library(lubridate)
+library(sandwich)
 
 ### fix death to be pretransplant only and just one row ###
 
@@ -65,15 +69,19 @@ df_final = df_final %>% mutate(
 ```
 
 ## Summary of listing dates, current dates
-The `df_final` dataset contains listings through 11/15/2023 and updates through 12/30/2023. The cutoff listing date was chosen to ensure all candidates had at least 6 weeks of follow-up.
+The `df_final` dataset contains listings through 8/31/2025 and updates through 8/31/2025. All 1-week intervals that began between 1/1/2019 and 6/30/2023, for candidates listed by 5/15/2023, were retained in the model training data. The cutoff listing date was chosen to ensure all candidates had at least 6 weeks of follow-up.
 ```{r}
 summary(df_final$can_listing_dt)
 summary(df_final$current_date)
+
+summary(df_final$can_listing_dt[df_final$train_test_split=="train"])
+summary(df_final$current_date[df_final$train_test_split=="train"])
 ```
 
 ## Bring in justification form data
 ```{r excep}
-curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2403/thor/ThoracicRegistration"
+## note: only works for Grace
+curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor/ThoracicRegistration"
 just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
     zap_formats() %>% zap_labels()
 just_form_hr_data_link = 
@@ -112,9 +120,10 @@ justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
              just_form_hr %>% select(JustId,RequestedCandStatCd,Exception,ThorSupportDevicePrimary,ThorSupportDeviceSecondary),
              by="JustId") %>%
   left_join(.,
-             just_form_hr_stat2 %>% select(JustId,CriteriaIabpSupport),
+             bind_rows(just_form_hr_stat2 %>% select(JustId,CriteriaIabpSupport),
+                       just_form_hr_stat3 %>% select(JustId,CriteriaIabpSupport)),
              by="JustId") %>%
-  left_join(.,thor_support_device %>% select(DeviceId,VadBrandId,TahBrandId,PercuBrandId,VentricularSupportId,ImplantDt),
+  left_join(.,thor_support_device %>% select(DeviceId,DeviceTypeId,VadBrandId,TahBrandId,PercuBrandId,VentricularSupportId,ImplantDt),
             by=c("ThorSupportDevicePrimary"="DeviceId")) %>%
   mutate(BrandId = coalesce(VadBrandId,TahBrandId,PercuBrandId)) %>%
   # EndDate is missing for people who were still at that status when data were pulled
@@ -138,26 +147,72 @@ df_final2 %>% count(status,Exception)
 # save df_final2 as df_final
 df_final=df_final2
 rm(df_final2)
-
+rm(just_form_hr,just_form_hr_data_link,risk_strat_data_hr,status_just_episode,just_form_hr_stat1,just_form_hr_stat2,just_form_hr_stat3,just_form_hr_stat4,thor_support_device,justdat,justdat_join)
+gc()
 ```
 
 # Calculate balloon pump and impella variables
 ```{r iabp}
-df_final %>% count(status,CriteriaIabpSupport)
+df_final %>% count(status,DeviceTypeId==8,CriteriaIabpSupport)
 # 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
 df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status,BrandId)
 df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status_criteria) # remember status_criteria can be missing
 df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(CriteriaIabpSupport) # no overlap bw IABP and Impella
 
-# should IABP and impella be memory variables or currently qualifying?
+# IABP and impella - currently qualifying
 df_final = df_final %>%
-  mutate(iabp = )
+  mutate(iabp = case_when(DeviceTypeId %in% 8 ~ 1,T ~ 0),
+         impella = case_when(BrandId %in% c(237,238,239,225,226) ~ 1,T ~ 0))
+
+# IABP and impella - ever previously or currently qualifying by
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(iabp_ever = ifelse(cumsum(iabp)>0,1,0),
+         impella_ever = ifelse(cumsum(impella)>0,1,0)) %>%
+  ungroup()
+with(df_final,table(iabp,iabp_ever))
+with(df_final,table(impella,impella_ever))
+df_final %>% filter(iabp==1) %>% count(iabp,status,Exception) # mostly status 2, standard or exception
+df_final %>% filter(iabp==0,iabp_ever==1) %>% count(status,Exception) # a lot of status 4 standard and some status 2 exception
+  # group_by(status) %>% summarise(propE = mean(Exception))
+df_final %>% filter(impella==1) %>% count(impella,status,Exception) # mostly status 2, standard or exception
+df_final %>% filter(impella==0,impella_ever==1) %>% count(status,Exception) # mostly status 4 by standard criteria
+
+# are these candidates actually being downgraded (or upgraded)?
+df_final %>% filter(train_test_split == "train") %>% filter(iabp==0,iabp_ever==1) %>% count(status,Exception,durable_LVAD,short_MCS_ever) %>% arrange(desc(n)) %>% print(n=15)
+df_final %>% filter(train_test_split == "train") %>% filter(impella==0,impella_ever==1) %>% count(status,Exception,durable_LVAD,short_MCS_ever) %>% arrange(desc(n)) %>% print(n=15)
+
+# are we confident the patient has transitioned? then we can use the currently qualifying variable
+```
+
+# Calculate diagnosis group variables
+```{r diag}
+# diagnosis group - CHD
+  ## the four big ones including CHD
+  # restrictive cardiomyopathy are ineligible to receive certain devices
+# definitely include retransplant
+```
+
+## Split data into training / testing sets
+All 1-week intervals that began between 1/1/2019 and 6/30/2023, for candidates listed by 5/15/2023, were retained in the model training data, while all other 1-week intervals were held out in validation and test sets for model assessment.
+```{r}
+# confirm listing dates and current dates
+with(df_final,tapply(can_listing_dt,train_test_split,summary))
+with(df_final,tapply(current_date,train_test_split,summary))
+
+#temporally split training and testing sets
+train_data = df_final %>% filter(train_test_split == "train")
+test_data = df_final %>% filter(train_test_split == "test")
+
+save(test_data, file = "mortality_model_test_data.RData")
 
 ```
 
 
 # Fit transplant models for IPW
-The denominator of the inverse probability weights is a function of the time-varying probability of transplant. We estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the entire discrete-time dataset from listing to removal and allowing patient characteristics to update at the beginning of each week. (Note: The training/test split is designed to hold out mortality information in particular, which was not used in this step.)
+The denominator of the inverse probability weights is a function of the time-varying probability of transplant. We estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the training discrete-time dataset from listing to removal and allowing patient characteristics to update at the beginning of each week.
+
+We are fitting this model in the training data, even though no mortality information are used, because transplant probabilities shift over time and we have data over a long time period, from 2019 through August 2025. Weights for model evaluation should therefore be based on transplant models fit to the validation and/or test data.
 
 We considered four specifications of the model for the denominator of the weights:
 
@@ -170,7 +225,7 @@ The denominator weights should adjust for all time-varying confounders of transp
 
 We then assessed covariate balance after weighting each week of the discrete-time dataset by the inverse probability of receiving the observed treatment (transplant or no transplant) that week. The weighted distributions of all variables (US-CRS 1.0 variables + status + hemodynamics + time since listing) were compared between the groups "transplant" and "no transplant", where patients could contribute to both groups, joining the "transplant" group on their week of receiving transplant.
 
-The model with US-CRS 1.0 variables + status and the model with US-CRS 1.0 variables + status + hemodynamics had comparable covariate balance, and the model without hemodynamics was selected for slightly better balance of key variables and parsimony.
+The model with US-CRS 1.0 variables + status + hemodynamics had the best covariate balance.
 
 ## Compare denominator models
 ```{r}
@@ -181,7 +236,7 @@ tx_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
     ns(BNP, df = 3)*BNP_NT_Pro +
-    durable_LVAD + short_MCS_ever), data = df_final, family = binomial)
+    durable_LVAD + short_MCS_ever), data = train_data, family = binomial)
 tx_model
 summary(tx_model)
 
@@ -190,7 +245,7 @@ tx_status_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
     ns(BNP, df = 3)*BNP_NT_Pro + 
-    durable_LVAD + short_MCS_ever + status), data = df_final, family = binomial)
+    durable_LVAD + short_MCS_ever + status), data = train_data, family = binomial)
 tx_status_model
 summary(tx_status_model)
 
@@ -199,7 +254,7 @@ tx_status_hemo_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
     ns(BNP, df = 3)*BNP_NT_Pro + 
-    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = df_final, family = binomial)
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = train_data, family = binomial)
 tx_status_hemo_model
 summary(tx_status_hemo_model)
 
@@ -209,20 +264,20 @@ tx_status_hemo_waitlist_model = glm(formula = as.formula(
    transplant ~ 
     ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
     ns(BNP, df = 3)*BNP_NT_Pro + 
-    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3) + ns(interval_start, df = 3)), data = df_final, family = binomial)
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3) + ns(interval_start, df = 3)), data = train_data, family = binomial)
 tx_status_hemo_waitlist_model
 summary(tx_status_hemo_waitlist_model)
 
 ## calculate weights for covariate balance assessment ##
 
 ## Predict probability of transplant
-df_final$fit_prob_simple <- predict(tx_model, newdata=df_final, type = "response")
-df_final$fit_prob_status <- predict(tx_status_model, newdata=df_final, type = "response")
-df_final$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=df_final, type = "response")
-df_final$fit_prob_waitlist <- predict(tx_status_hemo_waitlist_model, newdata=df_final, type = "response")
+train_data$fit_prob_simple <- predict(tx_model, newdata=train_data, type = "response")
+train_data$fit_prob_status <- predict(tx_status_model, newdata=train_data, type = "response")
+train_data$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=train_data, type = "response")
+train_data$fit_prob_waitlist <- predict(tx_status_hemo_waitlist_model, newdata=train_data, type = "response")
 
 ## Construct weight variables for covariate balance assessment
-df_final <- df_final %>%
+train_data <- train_data %>%
   mutate(weight_simple = if_else(transplant == 1, 1 / fit_prob_simple, 1 / (1 - fit_prob_simple)),
          weight_status = if_else(transplant == 1, 1 / fit_prob_status, 1 / (1 - fit_prob_status)),
          weight_hemo = if_else(transplant == 1, 1 / fit_prob_hemo, 1 / (1 - fit_prob_hemo)),
@@ -236,7 +291,7 @@ vars <- c("albumin", "bilirubin", "eGFR", "sodium", "BNP", "BNP_NT_Pro", "durabl
 gc()
 
 ## remove people missing status
-table_data = df_final %>% filter(!is.na(status)) %>%
+table_data = train_data %>% filter(!is.na(status)) %>%
   mutate(status_num = case_when(
     status %in% "inactive" ~ "7",
     T ~ status
@@ -281,15 +336,15 @@ printWaitlist = print(tabWeighted_waitlist, smd = TRUE, exact = "stage", quote =
 write.csv(printWaitlist, file = "tabWaitlist.csv")
 
 # compare status and hemo models
-AIC(tx_status_model) # 112936.7
-AIC(tx_status_hemo_model) # 112545 - hemo does predict transplant
+AIC(tx_status_model) # 100286.1
+AIC(tx_status_hemo_model) # 99945.18 - hemo does predict transplant
 
 # any reason not to do hemo? positivity violations? no
-summary(df_final$fit_prob_status)
-summary(df_final$fit_prob_hemo)
+summary(train_data$fit_prob_status)
+summary(train_data$fit_prob_hemo)
 
 # with chosen model, set probability of not receiving a transplant each week
-df_final = df_final %>%
+train_data = train_data %>%
   mutate(prob_no_tx = 1 - fit_prob_hemo)
 
 # clean up
@@ -299,23 +354,23 @@ gc()
 ```
 
 ## Fit numerator model for stabilized weights
-For stabilized weights, we also need to model the time-varying probability of transplant based on variables at baseline, which is, for us, at the start of a 6-week window. Any variables in the numerator model have to be included in the marginal structural model, so we restricted to the variables in US-CRS 1.0 (the base model) for this step. Again, we estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the entire discrete-time dataset from listing to removal, but divided into non-overlapping 6-week windows, with predictors collected at the start of the window.
+For stabilized weights, we also need to model the time-varying probability of transplant based on variables at baseline, which is, for us, at the start of a 6-week window. Any variables in the numerator model have to be included in the marginal structural model, so we restricted to the variables in US-CRS 1.0 (the base model) for this step. Again, we estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the training discrete-time dataset from listing to removal, but divided into non-overlapping 6-week windows, with predictors collected at the start of the window.
 
 Note that rows after removal/transplant are not needed for modeling the probability of transplant, because after removal, the probability of transplant is 0.
 ```{r}
 
 ## create numerator of stabilized weights ##
 # we want Pr(transplant) given variables at start of 6-week window
-# for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of df_final
+# for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of train_data
 
-# create 6-week windows of df_final
-df_final = df_final %>%
+# create 6-week windows of train_data
+train_data = train_data %>%
   group_by(PX_ID) %>%
   mutate(window=ceiling(row_number()/6),
          week_from_baseline = (row_number() - 6*(window-1))) %>%
   ungroup()
-# df_final %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
-df_final = df_final %>%
+# train_data %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
+train_data = train_data %>%
   group_by(PX_ID,window) %>%
   mutate(albumin_at_start = first(albumin),
          bilirubin_at_start = first(bilirubin),
@@ -331,29 +386,16 @@ df_final = df_final %>%
 ## just US-CRS variables bc anything in this numerator model has to be in the mortality model
 tx_model_first = glm(
    transplant ~ 
-    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = df_final, family = binomial)
+    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = train_data, family = binomial)
 summary(tx_model_first)
 
-# remove new variables from df_final
-df_final = df_final %>% select(-(window:short_mcs_ever_at_start))
+# remove new variables from train_data
+train_data = train_data %>% select(-(window:short_mcs_ever_at_start))
 
 ```
 
 
-## Split data into training / testing sets
-All 1-week intervals that began between 1/1/2019 and 12/31/2022, for candidates listed by 11/15/2022, were retained in the model training data, while all other 1-week intervals were held out in a test set for model assessment.
-```{r}
-# confirm listing dates and current dates
-with(df_final,tapply(can_listing_dt,train_test_split,summary))
-with(df_final,tapply(current_date,train_test_split,summary))
 
-#temporally split training and testing sets
-train_data = df_final %>% filter(train_test_split == "train")
-test_data = df_final %>% filter(train_test_split == "test")
-
-save(test_data, file = "mortality_model_test_data.RData")
-
-```
 
 
 ## Create week variable
@@ -366,11 +408,10 @@ train_data = train_data %>%
 ```
 
 
-## Censor the training data on 12/31/2022
+## Censor the training data on 8/15/2023
 Note: This code just censors the follow-up after removal for delisted candidates.
 ```{r}
-library(lubridate)
-censor_date_train = mdy("12-31-2022")
+censor_date_train = mdy("8-15-2023")
 train_data = train_data %>%
   mutate(death_after_delisting_dt = 
            as.Date(can_listing_dt) + removal_time + time_until_death_after_delisting,
@@ -464,18 +505,18 @@ train_data = train_data %>%
     row_number()==n() & outcome==1 ~ 1,
     row_number()==n() & !is.na(time_until_death_after_delisting) & is.na(time_until_censor_after_delisting) ~ 1,
     T ~ 0))
-table(train_data$outcome) # 1688
-table(train_data$outcome,train_data$CAN_REM_CD) # 923 removals due to deteriorated condition
+table(train_data$outcome) # 1936 
+table(train_data$outcome,train_data$CAN_REM_CD) # 1077 removals due to deteriorated condition
 
 # more than one death per px_id? no
-train_data %>% group_by(PX_ID) %>% filter(sum(outcome)>1)
+train_data %>% group_by(PX_ID) %>% filter(sum(outcome)>1) %>% nrow
   
 # more than one transplant per px_id? no
-train_data %>% group_by(PX_ID) %>% filter(sum(transplant)>1)
+train_data %>% group_by(PX_ID) %>% filter(sum(transplant)>1) %>% nrow
 
 # transplant or death not on last row? no
-train_data %>% filter(outcome==1,row_number()!=n())
-train_data %>% filter(transplant==1,row_number()!=n())
+train_data %>% filter(outcome==1,row_number()!=n()) %>% nrow
+train_data %>% filter(transplant==1,row_number()!=n()) %>% nrow
 
 # Remove total_duplicates from train_data so columns match
 # train_data = train_data %>% select(-any_tx,-duplicates_after_delisting)
@@ -535,7 +576,7 @@ combined_df = train_data %>% group_by(PX_ID, week) %>%
          rem=first(delisting2)>1) %>% ungroup() %>% filter(!rem) %>% select(-rem)
 
 # is transplant always the last week? yes
-combined_df %>% group_by(PX_ID,landmark) %>% filter(transplant==1,row_number()!=n())
+combined_df %>% group_by(PX_ID,landmark) %>% filter(transplant==1,row_number()!=n()) %>% nrow
 
 # Create weight variable based on prob_no_tx
 combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
@@ -567,7 +608,9 @@ combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
   cpo_at_start = first(cpo),
   api_at_start = first(api),
   papi_at_start = first(papi), 
-  lvad_years_at_start = first(lvad_years)
+  lvad_years_at_start = first(lvad_years),
+  impella_at_start = first(impella),
+  iabp_at_start = first(iabp)
 )
 
 # calculate numerator for stabilized weights
@@ -711,9 +754,6 @@ mortality_model_no_weights
 # for landmark model, use robust SEs (bc of repeat observations from same px_id)
 ## also known as GEE with working independence model
 
-# load package
-library(sandwich)
-
 # calculate robust VCOV matrix
 mortality_model_no_weights_VCOV = vcovCL(mortality_model_no_weights, cluster = ~ PX_ID)
 sqrt(diag(mortality_model_no_weights_VCOV))
@@ -736,7 +776,7 @@ summary(mortality_model_no_weights1)$coef[,"Std. Error"] # robust vs model-based
 ```
 
 ## Fit US-CRS 1.0
-```{r}
+```{r,eval=F}
 # lvad test variable for turning lvad variable into "currently qualifying by lvad"
 df_intervals = df_intervals %>% dplyr::mutate(
   durable_LVAD = as.numeric(as.character(durable_LVAD)),
@@ -892,16 +932,17 @@ mod_select = function(fit,consider_vars) {
     print("Current model:")
     print(formula(fit))
     print(paste("Current AIC:",AIC(fit)))
-    AIC_test = lapply(consider_vars,function(var) {
+    mod_test = lapply(consider_vars,function(var) {
       # update the model
       fit_test = stats::update(fit,as.formula(paste0(". ~ .",var)))
-      return(AIC(fit_test))
+      return(fit_test)
     })
-    if (AIC(fit) > min(as.numeric(AIC_test))) {
+    AIC_test = lapply(mod_test,function(mod) return(AIC(mod)))
+    if ((round(AIC(fit))-3) > round(min(as.numeric(AIC_test)))) {
       select_var_name = names(consider_vars)[which.min(as.numeric(AIC_test))]
       print(paste("Selected variable for addition/removal:",select_var_name))
       select_var_full = consider_vars[select_var_name]
-      fit = stats::update(fit,as.formula(paste0("~ .",select_var_full)))
+      fit = mod_test[[which(names(consider_vars)==select_var_name)]] #stats::update(fit,as.formula(paste0("~ .",select_var_full)))
       consider_vars = consider_vars[names(consider_vars) != select_var_name]
       continue=T
     } else {
@@ -917,19 +958,8 @@ mod_select = function(fit,consider_vars) {
 }
 ```
 
-## Model selection
-With the stabilized weights, perform forward selection, starting from the US-CRS 1.0 base model and considering whether the following reduce AIC:
-
-   - Nonlinear effects of all continuous US-CRS 1.0 variables
-
-   - Hemodynamics: PAPI, API, CPO
-  
-   - Two-way interactions of durable LVAD with sodium, albumin, bilirubin, eGFR, BNP
-
-   - Total years on durable LVAD
-
-IDEAS: Try adding time since listing, previous values, interactions of current and previous values.
-```{r}
+## Trim extreme values for model fitting
+```{r trim}
 # trim LVAD time to 10 years
 combined_df = combined_df %>% mutate(
     lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
@@ -959,7 +989,26 @@ trim_values = bind_rows(
     summarise_at(vars(BNP_at_start),.funs=c("min"=min,"max"=max)) %>%
     mutate(var="BNP"))
 write.csv(trim_values,file="trim_values.csv",row.names=F)
+```
 
+## Save training data for modeling
+```{r}
+save(combined_df,file="mortality_model_train_data.Rdata")
+```
+
+## Model selection by AIC
+With the stabilized weights, perform forward selection, starting from the US-CRS 1.0 base model and considering whether the following reduce AIC:
+
+   - Nonlinear effects of all continuous US-CRS 1.0 variables
+
+   - Hemodynamics: PAPI, API, CPO
+  
+   - Two-way interactions of durable LVAD with sodium, albumin, bilirubin, eGFR, BNP
+
+   - Total years on durable LVAD
+
+IDEAS: Try adding time since listing, previous values, interactions of current and previous values.
+```{r}
 # fit base model w/ stabilized weights
 mortality_model_base = glm(
   outcome ~ 
@@ -1027,6 +1076,18 @@ mortality_model_full = glm(
   weights = sweight, family = binomial)
 AIC(mortality_model_full) # 62172.65
 
+## try adding impella and IABP (currently qualifying)
+mort_impella = update(mortality_model_full,~.+impella_at_start+iabp_at_start)
+summary(mort_impella)
+AIC(mort_impella) # 62029.07
+
+# get robust SEs
+mort_impella_VCOV = vcovCL(mort_impella, cluster = ~ PX_ID)
+mort_impella_sum = do.call(rbind.data.frame,lapply(names(coef(mort_impella)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mort_impella,vars=var_interest,cov=mort_impella_VCOV))
+}))
+mort_impella_sum
+
 # look at model
 summary(mortality_model_full)
 
@@ -1061,12 +1122,20 @@ mortality_model_sum_coef
 # make supplemental table of coefficients
 write.csv(mortality_model_sum_coef %>% rename(coef=xb) %>% mutate_at(.vars=vars(coef,se,lowCI,highCI),round,digits=3) %>% mutate(p=pval_format(p)),
           file="mortality-model-coefs.csv",row.names=F)
+```
 
-# Short-term MCS hazard ratio (95% CI):
+## Device hazard ratios: ECMO/surgical MCS, impella, IABP
+```{r stmcs}
 mortality_model_full_sum[mortality_model_full_sum$var=="short_mcs_ever_at_start",]
 
-# Durable LVAD hazard ratio (95% CI):
+# model w/ impella and iabp
+mort_impella_sum[mort_impella_sum$var=="short_mcs_ever_at_start",]
+mort_impella_sum[mort_impella_sum$var=="impella_at_start",]
+mort_impella_sum[mort_impella_sum$var=="iabp_at_start",]
+```
 
+## Durable LVAD hazard ratio at average lab values
+```{r lvad}
 # all the terms with durable LVAD
 lvad_termnames = (names(coef(mortality_model_full)))[grepl("LVAD",names(coef(mortality_model_full)))]
 lvad_termnames
@@ -1079,7 +1148,7 @@ egfr_avg_ns = ns(mean(combined_df$eGFR_at_start),3,knots=as.numeric(knotsdat["eG
 bnp_avg_ns = ns(log(mean(combined_df$BNP_at_start[combined_df$BNP_NT_Pro==0])+1),3,knots=as.numeric(knotsdat["BNP",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["BNP",c("knot1","knot4")]))
 sod_avg_ns = ns(mean(combined_df$sodium_at_start),3,knots=as.numeric(knotsdat["sodium",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["sodium",c("knot1","knot4")]))
 
-# now get hazard ratio for LVAD at average lab values
+# now get hazard ratio for LVAD (just started, years=0) at average lab values
 lvad_termnames
 getHR(mortality_model_full,
       vars=lvad_termnames,
@@ -1130,7 +1199,7 @@ quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
 ## SAVE MORTALITY MODEL
 # also, function to calculate predicted 6-week survival
 # also, model for numerator of stabilized weights
-save(mortality_model_full,pred_data_fun,tx_model_first,file="mortality-model.RData")
+save(mortality_model_full,pred_data_fun,tx_model_first,mort_impella,file="mortality-model.RData")
 save(combined_df,file="mortality-df.RData")
 
 # summarize survival probability by status
@@ -1145,7 +1214,7 @@ ggplot(pred_data %>% filter(!is.na(status),!(status=="inactive")),
   labs(x = "Status", y = "6-Week Survival Probability") +
   # title = "Figure 1: Box plots of predicted 6-week survival without transplant\nin adult heart candidates, 2019-2022, by status"
   theme_bw()
-ggsave("pred-by-status.png",width=6,height=4)
+ggsave("pred-by-status-NEW.png",width=6,height=4)
 ```
 
 ## Calculate 6-week survival by time on LVAD
@@ -1176,7 +1245,8 @@ new_data_lvad <- data.frame(
   cpo_at_start = mean(pred_data$cpo_at_start[pred_data$durable_LVAD_at_start==1]),
   api_at_start = mean(pred_data$api_at_start[pred_data$durable_LVAD_at_start==1]),
   papi_at_start = mean(pred_data$papi_at_start[pred_data$durable_LVAD_at_start==1]),
-  lvad_years_at_start = seq(0,10,.2)
+  lvad_years_at_start = seq(0,10,.2),
+  impella_at_start=0,iabp_at_start=0
 )
 head(new_data_lvad)
 pred_lvad <- pred_data_fun(new_data_lvad)
@@ -1199,7 +1269,7 @@ ggplot(pred_lvad, aes(x = lvad_years_at_start, y = prob_surv_6wk)) +
   geom_text(aes(4,prob_surv_6wk_status["3"],label="Status 3",vjust=-1)) +
   geom_hline(yintercept=prob_surv_6wk_status["4"]) +
   geom_text(aes(4,prob_surv_6wk_status["4"],label="Status 4",vjust=-1))
-ggsave("pred-by-LVADtime.png",width=6,height=4)
+ggsave("pred-by-LVADtime-NEW.png",width=6,height=4)
 
 # distribution of time on LVAD in training data, including all landmarks
 summary(pred_data$lvad_years_at_start[pred_data$durable_LVAD_at_start==1])
@@ -1420,7 +1490,7 @@ ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)"),
        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
   theme_bw() +
   theme(text=element_text(size=14))
-ggsave("lab-coefs-by-lvad.png",width=7.5,height=5,dpi=300)
+ggsave("lab-coefs-by-lvad-NEW.png",width=7.5,height=5,dpi=300)
 
 
 
@@ -1488,7 +1558,7 @@ ggplot(bind_rows(api_rr %>% rename(value=api) %>% mutate(hemo="API"),
        # linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
   theme_bw() +
   theme(text=element_text(size=14))
-ggsave("hemo-coefs.png",width=6,height=4)
+ggsave("hemo-coefs-NEW.png",width=6,height=4)
 ```
 
 
