@@ -157,7 +157,7 @@ df_final %>% count(status,DeviceTypeId==8,CriteriaIabpSupport)
 # 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
 df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status,BrandId)
 df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status_criteria) # remember status_criteria can be missing
-df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(CriteriaIabpSupport) # no overlap bw IABP and Impella
+df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(CriteriaIabpSupport,DeviceTypeId==8) # no overlap bw IABP and Impella
 
 # IABP and impella - currently qualifying
 df_final = df_final %>%
@@ -170,6 +170,8 @@ df_final = df_final %>%
   mutate(iabp_ever = ifelse(cumsum(iabp)>0,1,0),
          impella_ever = ifelse(cumsum(impella)>0,1,0)) %>%
   ungroup()
+
+# some checks
 with(df_final,table(iabp,iabp_ever))
 with(df_final,table(impella,impella_ever))
 df_final %>% filter(iabp==1) %>% count(iabp,status,Exception) # mostly status 2, standard or exception
@@ -181,8 +183,12 @@ df_final %>% filter(impella==0,impella_ever==1) %>% count(status,Exception) # mo
 # are these candidates actually being downgraded (or upgraded)?
 df_final %>% filter(train_test_split == "train") %>% filter(iabp==0,iabp_ever==1) %>% count(status,Exception,durable_LVAD,short_MCS_ever) %>% arrange(desc(n)) %>% print(n=15)
 df_final %>% filter(train_test_split == "train") %>% filter(impella==0,impella_ever==1) %>% count(status,Exception,durable_LVAD,short_MCS_ever) %>% arrange(desc(n)) %>% print(n=15)
-
 # are we confident the patient has transitioned? then we can use the currently qualifying variable
+
+## working
+# pull forward IABP and Impella into inactive status
+df_final %>% filter(status=="inactive") %>% count(iabp,impella)
+
 ```
 
 # Calculate diagnosis group variables
@@ -191,6 +197,73 @@ df_final %>% filter(train_test_split == "train") %>% filter(impella==0,impella_e
   ## the four big ones including CHD
   # restrictive cardiomyopathy are ineligible to receive certain devices
 # definitely include retransplant
+table(df_final$diagnosis,useNA="ifany")
+
+# read in SAF to get CAN_DGN
+## only works for Grace
+curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor"
+df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand.sas7bdat'),
+                                  col_select=c(PX_ID, CAN_DGN, CAN_DGN2))
+df_final = left_join(df_final,df_cand_thor,by="PX_ID")
+
+# look at CAN_DGN for each diagnosis
+df_final %>% filter(CAN_DGN %in% c(1208,1209,1100,1199)) %>% count(diagnosis,CAN_DGN)
+
+# recode 1100 and 1199 as Re-Transplant
+df_final = df_final %>%
+  mutate(diagnosis = case_when(CAN_DGN %in% c(1100,1199) ~ "Re-Transplant",
+                               T ~ diagnosis))
+table(df_final$diagnosis,useNA="ifany")
+
+# recode 1208 and 1209 as Dilated_CM
+df_final = df_final %>%
+  mutate(diagnosis = case_when(CAN_DGN %in% c(1208,1209) ~ "Dilated_CM",
+                               T ~ diagnosis))
+table(df_final$diagnosis,useNA="ifany")
+
+# confirm no missing CAN_DGN being coded as Other
+df_final %>% filter(is.na(CAN_DGN)) %>% nrow
+
+# one observation per PX_ID
+df_final1 = df_final %>% filter(train_test_split=="train") %>% distinct(PX_ID,diagnosis,CAN_DGN)
+nrow(df_final1);dim(table(df_final1$PX_ID))
+table(df_final1$diagnosis,useNA="ifany")
+
+## Comparison: heart-pipeline versus PSR ##
+# 1000-1049 but not 1007: Dilated Cardiomyopathy - just Cardiomyopathy
+# 1050-1099 but not 1051: Restricted - just Cardiomyopathy
+# 1051: Amyloid - just Cardiomyopathy
+# 1201: Hypertrophic - just Cardiomyopathy
+# 1202: Valvular
+# 1007, 1200: Ischemic - Coronary Artery Disease
+# ??1208,1209
+#   He has them as congenital; PSR has them as cardiomyopathy
+#   After talking to Nikhil: they should be dilated cardiomyopathy
+# ??1100,1199
+#   He has them as Other; they should be Retransplant
+
+## heart_pipeline_final.rmd ##
+# diagnosis = case_when(
+#     CAN_DGN >= 1000 & CAN_DGN <= 1049 & CAN_DGN != 1007 ~ 'Dilated_CM',
+#     CAN_DGN >= 1050 & CAN_DGN <= 1099 & CAN_DGN != 1051 ~ 'Restricted',
+#     CAN_DGN == 1051 ~ 'Amyloid',
+#     CAN_DGN >= 1101 & CAN_DGN <= 1106 ~ 'Re-Transplant',
+#     CAN_DGN == 1201 ~ 'Hypertrophic',
+#     CAN_DGN == 1202 ~ 'Valvular',
+#     CAN_DGN == 1203 | (CAN_DGN >= 1205 & CAN_DGN <= 1209) ~ 'Congenital', 
+#     CAN_DGN == 1200 | CAN_DGN == 1007 ~ 'Ischemic',
+#     TRUE ~ 'Other'), 
+
+## PSR ##
+# if cdgn in (1000 1001 1002 1003 1004 1005 1006 1049 1050 1051 1052 1053 1054 1099 1201) then DGN_PRIM = 'Cardiomyopathy';
+# 	else if cdgn in (1100 1101 1102 1103 1104 1105 1106 1199) then DGN_PRIM = '.';	/** Retranspant/graft failure **/
+# 	else if cdgn in (1007 1200) then DGN_PRIM = 'Coronary Artery Disease';
+# 	else if cdgn in (1202) then DGN_PRIM = 'Valvular Heart Disease';
+# 	else if cdgn in (1203 1205 1206 1207) then DGN_PRIM = 'Congenital Heart Disease';
+# 	else if cdgn in (1204 1497 1498) then DGN_PRIM = 'Other';
+# substr(can_dgn,1,4) %in% c(1008,1009,1010,1208,1209) ~ "Cardiomyopathy",
+# substr(can_dgn,1,4) %in% c(1100,1101,1102,1103,1104,1105,1106,1199) ~ "Retransplant",
+
 ```
 
 ## Split data into training / testing sets
