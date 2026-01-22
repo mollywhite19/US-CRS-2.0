@@ -129,48 +129,72 @@ justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
   # EndDate is missing for people who were still at that status when data were pulled
   mutate(EndDate = case_when(is.na(EndDate) ~ max(EndDate,na.rm=T),T ~ EndDate))
 
+# special dataset for iabp and impella
+# 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
+justdat_device = justdat %>%
+  mutate(iabp = case_when(DeviceTypeId %in% 8 ~ 1,T ~ 0),
+         impella = case_when(BrandId %in% c(237,238,239,225,226) ~ 1,T ~ 0)) %>%
+  arrange(px_id,BeginDate,EndDate) %>%
+  group_by(px_id) %>%
+  mutate(iabp_ever = ifelse(cumsum(iabp)>0,1,0),
+         impella_ever = ifelse(cumsum(impella)>0,1,0)) %>%
+  mutate(rown=row_number()==n()) %>%
+  ungroup() %>%
+  # define a BeginDate-EndDate range until the next form (including inactive time and status 5-6)
+  mutate(EndDate = case_when(!rown ~ lead(BeginDate),
+                             T ~ EndDate))
+  
 # keep justification forms for patients in study, on current_date (end of day)
 justdat_join = justdat %>% right_join(.,df_final %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>%
   mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% 
-  filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct
+  filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct # note: distinct not needed
+
+# keep devices from forms for patients in study, on current_date (end of day)
+justdat_device_join = justdat_device %>% right_join(.,df_final %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>%
+  mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% 
+  filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct # note: distinct not needed
+justdat_device_join %>% count(iabp,iabp_ever,impella,impella_ever)
 
 # join justification forms to df_final
 names(justdat_join)[names(justdat_join) %in% names(df_final)]
+names(justdat_device_join)[names(justdat_device_join) %in% names(df_final)]
 df_final2 = df_final %>% rename(JustId_old=JustId,RequestedCandStatCd_old=RequestedCandStatCd,Exception_old=Exception) %>%
-  left_join(.,justdat_join,by=c("PX_ID"="px_id","current_date"))
+  left_join(.,justdat_join,by=c("PX_ID"="px_id","current_date")) %>%
+  left_join(.,justdat_device_join %>% select(px_id,current_date,iabp,impella,iabp_ever,impella_ever),
+            by=c("PX_ID"="px_id","current_date"))
 
 ## sanity checks
 nrow(df_final2);nrow(df_final)
 df_final2 %>% count(status,RequestedCandStatCd)
 df_final2 %>% count(status,Exception)
+df_final2 %>% count(iabp,impella)
+df_final2 %>% count(iabp,iabp_ever,impella,impella_ever)
+df_final2 %>% filter(is.na(iabp),is.na(impella)) %>% count(status)
+
+# people missing both iabp and impella are people w/ no previous Status 1-4 form
+justdat %>% right_join(.,df_final2 %>% filter(is.na(iabp),is.na(impella)) %>%
+                                select(PX_ID,current_date_yms),by=c("px_id"="PX_ID")) %>%
+  filter(BeginDate <= current_date_yms) %>%
+  nrow
+
+# recode missing iabp and impella as 0
+df_final2 = df_final2 %>%
+  mutate(iabp=ifelse(is.na(iabp),0,iabp),
+         iabp_ever=ifelse(is.na(iabp_ever),0,iabp_ever),
+         impella=ifelse(is.na(impella),0,impella),
+         impella_ever=ifelse(is.na(impella_ever),0,impella_ever))
+df_final2 %>% count(iabp,iabp_ever,impella,impella_ever)
+df_final2 %>% count(status,iabp,impella) %>% print(n=30) # carry forward into next status, even if inactive, 5, or 6
 
 # save df_final2 as df_final
 df_final=df_final2
 rm(df_final2)
-rm(just_form_hr,just_form_hr_data_link,risk_strat_data_hr,status_just_episode,just_form_hr_stat1,just_form_hr_stat2,just_form_hr_stat3,just_form_hr_stat4,thor_support_device,justdat,justdat_join)
+rm(just_form_hr,just_form_hr_data_link,risk_strat_data_hr,status_just_episode,just_form_hr_stat1,just_form_hr_stat2,just_form_hr_stat3,just_form_hr_stat4,thor_support_device,justdat,justdat_device,justdat_join,justdat_device_join)
 gc()
 ```
 
-# Calculate balloon pump and impella variables
+# Checks on balloon pump and impella variables
 ```{r iabp}
-df_final %>% count(status,DeviceTypeId==8,CriteriaIabpSupport)
-# 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
-df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status,BrandId)
-df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(status_criteria) # remember status_criteria can be missing
-df_final %>% filter(BrandId %in% c(237,238,239,225,226)) %>% count(CriteriaIabpSupport,DeviceTypeId==8) # no overlap bw IABP and Impella
-
-# IABP and impella - currently qualifying
-df_final = df_final %>%
-  mutate(iabp = case_when(DeviceTypeId %in% 8 ~ 1,T ~ 0),
-         impella = case_when(BrandId %in% c(237,238,239,225,226) ~ 1,T ~ 0))
-
-# IABP and impella - ever previously or currently qualifying by
-df_final = df_final %>%
-  group_by(PX_ID) %>%
-  mutate(iabp_ever = ifelse(cumsum(iabp)>0,1,0),
-         impella_ever = ifelse(cumsum(impella)>0,1,0)) %>%
-  ungroup()
-
 # some checks
 with(df_final,table(iabp,iabp_ever))
 with(df_final,table(impella,impella_ever))
@@ -185,10 +209,13 @@ df_final %>% filter(train_test_split == "train") %>% filter(iabp==0,iabp_ever==1
 df_final %>% filter(train_test_split == "train") %>% filter(impella==0,impella_ever==1) %>% count(status,Exception,durable_LVAD,short_MCS_ever) %>% arrange(desc(n)) %>% print(n=15)
 # are we confident the patient has transitioned? then we can use the currently qualifying variable
 
-## working
-# pull forward IABP and Impella into inactive status
-df_final %>% filter(status=="inactive") %>% count(iabp,impella)
-
+# look at someone who was inactive with iabp_ever=1 but iabp=0
+## it's because they switched to Status 1 w/ a different device type (9=VA ECMO)
+df_final %>% filter(PX_ID==1027106) %>%
+  select(PX_ID,current_date,iabp,iabp_ever,status,durable_LVAD,JustId) %>%
+  filter(current_date>=ymd("2019-04-20")) %>% head(20)
+justdat %>% filter(px_id==1027106,BeginDate>ymd("2019-04-17")) %>%
+  select(px_id,BeginDate,EndDate,CriteriaIabpSupport,RequestedCandStatCd,BrandId,DeviceTypeId)
 ```
 
 # Calculate diagnosis group variables
