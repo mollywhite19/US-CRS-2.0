@@ -211,11 +211,11 @@ df_final %>% filter(train_test_split == "train") %>% filter(impella==0,impella_e
 
 # look at someone who was inactive with iabp_ever=1 but iabp=0
 ## it's because they switched to Status 1 w/ a different device type (9=VA ECMO)
-df_final %>% filter(PX_ID==1027106) %>%
-  select(PX_ID,current_date,iabp,iabp_ever,status,durable_LVAD,JustId) %>%
-  filter(current_date>=ymd("2019-04-20")) %>% head(20)
-justdat %>% filter(px_id==1027106,BeginDate>ymd("2019-04-17")) %>%
-  select(px_id,BeginDate,EndDate,CriteriaIabpSupport,RequestedCandStatCd,BrandId,DeviceTypeId)
+# df_final %>% filter(PX_ID==1027106) %>%
+#   select(PX_ID,current_date,iabp,iabp_ever,status,durable_LVAD,JustId) %>%
+#   filter(current_date>=ymd("2019-04-20")) %>% head(20)
+# justdat %>% filter(px_id==1027106,BeginDate>ymd("2019-04-17")) %>%
+#   select(px_id,BeginDate,EndDate,CriteriaIabpSupport,RequestedCandStatCd,BrandId,DeviceTypeId)
 ```
 
 # Calculate diagnosis group variables
@@ -248,13 +248,19 @@ df_final = df_final %>%
                                T ~ diagnosis))
 table(df_final$diagnosis,useNA="ifany")
 
+# look at CAN_DGN for each diagnosis
+df_final %>% filter(CAN_DGN %in% c(1208,1209,1100,1199)) %>% count(diagnosis,CAN_DGN)
+
 # confirm no missing CAN_DGN being coded as Other
 df_final %>% filter(is.na(CAN_DGN)) %>% nrow
 
-# one observation per PX_ID
+# one observation per PX_ID in training data
 df_final1 = df_final %>% filter(train_test_split=="train") %>% distinct(PX_ID,diagnosis,CAN_DGN)
 nrow(df_final1);dim(table(df_final1$PX_ID))
 table(df_final1$diagnosis,useNA="ifany")
+
+## note: could pool Dilated, Restricted, Amyloid, and Hypertrophic as "Cardiomyopathy" like SRTR
+
 
 ## Comparison: heart-pipeline versus PSR ##
 # 1000-1049 but not 1007: Dilated Cardiomyopathy - just Cardiomyopathy
@@ -710,11 +716,14 @@ combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
   papi_at_start = first(papi), 
   lvad_years_at_start = first(lvad_years),
   impella_at_start = first(impella),
-  iabp_at_start = first(iabp)
-)
+  iabp_at_start = first(iabp),
+  impella_ever_at_start = first(impella_ever),
+  iabp_ever_at_start = first(iabp_ever),
+  diagnosis_at_start = first(diagnosis)
+) %>% ungroup()
 
 # calculate numerator for stabilized weights
-combined_df = combined_df %>% ungroup() %>% mutate(
+combined_df = combined_df %>% mutate(
   prob_no_tx_start = 1 - predict(tx_model_first, newdata = combined_df, type = "response"),
   prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start))
 with(combined_df,table(prob_no_tx==1,prob_no_tx_start==1))
