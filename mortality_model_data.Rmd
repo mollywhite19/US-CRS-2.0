@@ -1144,15 +1144,15 @@ length(coef(mortality_modelA)) # 10
 ### MODEL C: US-CRS 1.0 + current impella + current iabp ###
 mortality_modelC = glm(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp + impella, data = combined_df, weights = sweight, family = binomial)
-AIC(mortality_modelC) # 73137.97
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start, data = combined_df, weights = sweight, family = binomial)
+AIC(mortality_modelC) # 72956.31
 length(coef(mortality_modelC)) # 12
 
 ### MODEL D: US-CRS 1.0 + ever impella + ever iabp ###
 mortality_modelD = glm(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_ever + impella_ever, data = combined_df, weights = sweight, family = binomial)
-AIC(mortality_modelD) # 73120.31
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_ever_at_start + impella_ever_at_start, data = combined_df, weights = sweight, family = binomial)
+AIC(mortality_modelD) # 73036.53
 length(coef(mortality_modelD)) # 12
 
 ### MODEL B: US-CRS 1.0 + forward selection of nonlinear effects ###
@@ -1184,8 +1184,8 @@ combined_df = combined_df %>%
 
 mort_mod_selectE = mod_select(mortality_modelB,list(
   week="+factor(week_from_baseline)",
-  impella_ever="+impella_ever_at_start",
-  iabp_ever="+iabp_ever_at_start",
+  impella_ever="+impella_at_start",
+  iabp_ever="+iabp_at_start",
   diagnosis="+diagnosis_at_start",
   chd="+chd_at_start",
   lvad_time = "+lvad_years_at_start",
@@ -1194,15 +1194,15 @@ mort_mod_selectE = mod_select(mortality_modelB,list(
   papi="+papi_at_start"
   ))
 mortality_modelE = stats::update(mortality_modelA,mort_mod_selectE)
-AIC(mortality_modelE) # 72299.87
+AIC(mortality_modelE) # 72249.18
 length(coef(mortality_modelE)) # 40
 print(formula(mortality_modelE))
 # outcome ~ durable_LVAD_at_start + short_mcs_ever_at_start + ns(eGFR_at_start, 
 #     df = 3) + ns(sodium_at_start, df = 3) + ns(log(BNP_at_start + 
 #     1), df = 3) + BNP_NT_Pro_at_start + ns(albumin_at_start, 
 #     df = 3) + ns(log(bilirubin_at_start + 1), df = 3) + lvad_years_at_start + 
-#     iabp_ever_at_start + api_at_start + diagnosis_at_start + 
-#     impella_ever_at_start + factor(week_from_baseline) + cpo_at_start + 
+#     iabp_at_start + api_at_start + diagnosis_at_start + 
+#     impella_at_start + factor(week_from_baseline) + cpo_at_start + 
 #     ns(log(BNP_at_start + 1), df = 3):BNP_NT_Pro_at_start
 
 ### Model F ###
@@ -1214,14 +1214,14 @@ mort_mod_selectF = mod_select(mortality_modelE,list(
   api_ns="-api_at_start+ns(api_at_start,df=3)"
   ))
 mortality_modelF = stats::update(mortality_modelA,mort_mod_selectF)
-AIC(mortality_modelF) # 72149.87
+AIC(mortality_modelF) # 72102.94
 length(coef(mortality_modelF)) # 46
 print(formula(mortality_modelF))
 # outcome ~ durable_LVAD_at_start + short_mcs_ever_at_start + ns(eGFR_at_start, 
 #     df = 3) + ns(sodium_at_start, df = 3) + ns(log(BNP_at_start + 
 #     1), df = 3) + BNP_NT_Pro_at_start + ns(albumin_at_start, 
-#     df = 3) + ns(log(bilirubin_at_start + 1), df = 3) + iabp_ever_at_start + 
-#     diagnosis_at_start + impella_ever_at_start + factor(week_from_baseline) + 
+#     df = 3) + ns(log(bilirubin_at_start + 1), df = 3) + iabp_at_start + 
+#     diagnosis_at_start + impella_at_start + factor(week_from_baseline) + 
 #     ns(lvad_years_at_start, df = 3, knots = c(1, 3)) + ns(api_at_start, 
 #     df = 3) + ns(cpo_at_start, df = 3) + ns(log(BNP_at_start + 
 #     1), df = 3):BNP_NT_Pro_at_start
@@ -1266,7 +1266,7 @@ print(formula(mortality_modelF))
 mortality_modelG_start = glm(
   outcome ~ 
     factor(week_from_baseline) + 
-    (durable_LVAD_at_start + short_mcs_ever_at_start + iabp_ever_at_start + impella_ever_at_start) *
+    (durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start) *
     (ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + 
        ns(log(BNP_at_start + 1), df = 3)*BNP_NT_Pro_at_start + 
        ns(albumin_at_start,df = 3) +
@@ -1320,22 +1320,22 @@ wald_test(mortality_modelG_start,paste0("short_mcs_ever_at_start:ns(api_at_start
 wald_test(mortality_modelG_start,paste0("short_mcs_ever_at_start:ns(cpo_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .03
 
 ## Impella - only sodium
-wald_test(mortality_modelG_start,paste0("impella_ever_at_start:ns(eGFR_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .50
-wald_test(mortality_modelG_start,paste0("impella_ever_at_start:ns(sodium_at_start, df = 3)",1:3),mortality_modelG_VCOV) # <.001
-wald_test(mortality_modelG_start,c(paste0("impella_ever_at_start:ns(log(BNP_at_start + 1), df = 3)",1:3),"impella_ever_at_start:BNP_NT_Pro_at_start1"),mortality_modelG_VCOV) # .92
-wald_test(mortality_modelG_start,paste0("impella_ever_at_start:ns(albumin_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .07
-wald_test(mortality_modelG_start,paste0("impella_ever_at_start:ns(log(bilirubin_at_start + 1), df = 3)",1:3),mortality_modelG_VCOV) # .08
-wald_test(mortality_modelG_start,paste0("impella_ever_at_start:ns(api_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .12
-wald_test(mortality_modelG_start,paste0("impella_ever_at_start:ns(cpo_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .23
+wald_test(mortality_modelG_start,paste0("impella_at_start:ns(eGFR_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .50
+wald_test(mortality_modelG_start,paste0("impella_at_start:ns(sodium_at_start, df = 3)",1:3),mortality_modelG_VCOV) # <.001
+wald_test(mortality_modelG_start,c(paste0("impella_at_start:ns(log(BNP_at_start + 1), df = 3)",1:3),"impella_at_start:BNP_NT_Pro_at_start1"),mortality_modelG_VCOV) # .92
+wald_test(mortality_modelG_start,paste0("impella_at_start:ns(albumin_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .07
+wald_test(mortality_modelG_start,paste0("impella_at_start:ns(log(bilirubin_at_start + 1), df = 3)",1:3),mortality_modelG_VCOV) # .08
+wald_test(mortality_modelG_start,paste0("impella_at_start:ns(api_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .12
+wald_test(mortality_modelG_start,paste0("impella_at_start:ns(cpo_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .23
 
 ## IABP - only bilirubin
-wald_test(mortality_modelG_start,paste0("iabp_ever_at_start:ns(eGFR_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .63
-wald_test(mortality_modelG_start,paste0("iabp_ever_at_start:ns(sodium_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .25
-wald_test(mortality_modelG_start,c(paste0("iabp_ever_at_start:ns(log(BNP_at_start + 1), df = 3)",1:3),"iabp_ever_at_start:BNP_NT_Pro_at_start1"),mortality_modelG_VCOV) # .74
-wald_test(mortality_modelG_start,paste0("iabp_ever_at_start:ns(albumin_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .70
-wald_test(mortality_modelG_start,paste0("iabp_ever_at_start:ns(log(bilirubin_at_start + 1), df = 3)",1:3),mortality_modelG_VCOV) # .04
-wald_test(mortality_modelG_start,paste0("iabp_ever_at_start:ns(api_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .5
-wald_test(mortality_modelG_start,paste0("iabp_ever_at_start:ns(cpo_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .98
+wald_test(mortality_modelG_start,paste0("iabp_at_start:ns(eGFR_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .63
+wald_test(mortality_modelG_start,paste0("iabp_at_start:ns(sodium_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .25
+wald_test(mortality_modelG_start,c(paste0("iabp_at_start:ns(log(BNP_at_start + 1), df = 3)",1:3),"iabp_at_start:BNP_NT_Pro_at_start1"),mortality_modelG_VCOV) # .74
+wald_test(mortality_modelG_start,paste0("iabp_at_start:ns(albumin_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .70
+wald_test(mortality_modelG_start,paste0("iabp_at_start:ns(log(bilirubin_at_start + 1), df = 3)",1:3),mortality_modelG_VCOV) # .04
+wald_test(mortality_modelG_start,paste0("iabp_at_start:ns(api_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .5
+wald_test(mortality_modelG_start,paste0("iabp_at_start:ns(cpo_at_start, df = 3)",1:3),mortality_modelG_VCOV) # .98
 
 # fit Model G w/ selected interactions
 mortality_modelG = glm(
@@ -1346,8 +1346,8 @@ mortality_modelG = glm(
       ns(log(BNP_at_start + 1), df = 3)*BNP_NT_Pro_at_start + 
        ns(albumin_at_start,df = 3) +
         ns(api_at_start,df=3) + ns(cpo_at_start,df=3)) +
-    iabp_ever_at_start*ns(log(bilirubin_at_start + 1), df = 3) +
-    impella_ever_at_start*ns(sodium_at_start, df = 3) +
+    iabp_at_start*ns(log(bilirubin_at_start + 1), df = 3) +
+    impella_at_start*ns(sodium_at_start, df = 3) +
     ns(eGFR_at_start, df = 3) +
     diagnosis_at_start + 
     ns(lvad_years_at_start,df=3,knots=c(1,3)),
@@ -1355,27 +1355,28 @@ mortality_modelG = glm(
   weights = sweight, family = binomial)
 gc()
 
-AIC(mortality_modelG) # 71693.86
+AIC(mortality_modelG) # 71622.36
 length(coef(mortality_modelG)) # 71
 print(formula(mortality_modelG))
 # outcome ~ factor(week_from_baseline) + durable_LVAD_at_start * 
 #     ns(api_at_start, df = 3) + short_mcs_ever_at_start * (ns(log(BNP_at_start + 
 #     1), df = 3) * BNP_NT_Pro_at_start + ns(albumin_at_start, 
 #     df = 3) + ns(api_at_start, df = 3) + ns(cpo_at_start, df = 3)) + 
-#     iabp_ever_at_start * ns(log(bilirubin_at_start + 1), df = 3) + 
-#     impella_ever_at_start * ns(sodium_at_start, df = 3) + ns(eGFR_at_start, 
+#     iabp_at_start * ns(log(bilirubin_at_start + 1), df = 3) + 
+#     impella_at_start * ns(sodium_at_start, df = 3) + ns(eGFR_at_start, 
 #     df = 3) + diagnosis_at_start + ns(lvad_years_at_start, df = 3, 
 #     knots = c(1, 3))
 
 # save models
 save(mortality_modelA,mortality_modelB,mortality_modelC,
      mortality_modelD,mortality_modelE,mortality_modelF,
-     mortality_modelG,mortality_modelG_VCOV,file="mortality-model-options.Rdata")
+     mortality_modelG,file="mortality-model-options.Rdata") # mortality_modelG_VCOV
 
 ```
 
+Before the next step, the models are compared in the validation data, in the model_eval.Rmd script.
+
 ## Save final model and calculate robust standard errors
-Before this step, the above models are compared in the validation data, in the model_eval.Rmd script.
 ```{r}
 
 mortality_model_full = glm(
