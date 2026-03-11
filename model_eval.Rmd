@@ -2,6 +2,8 @@
 title: "mortality model assessment"
 output: html_document
 date: "2024-07-15"
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -9,7 +11,7 @@ rm(list = ls())
 # load("C:/Users/mhwhi/Downloads/mortality-model.RData")
 # load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
 # Grace
-base::load("mortality-model.RData")
+base::load("mortality-model-options.Rdata")
 base::load("mortality_model_test_data.RData")
 library(rms)
 library(tidyr)
@@ -144,9 +146,13 @@ test_data = test_data %>% mutate(
   cpo_at_start = cpo,
   api_at_start = api,
   papi_at_start = papi,
-  lvad_years_at_start = lvad_years
+  lvad_years_at_start = lvad_years,
+  impella_at_start = impella,
+  iabp_at_start = iabp,
+  iabp_ever_at_start = iabp_ever,
+  impella_ever_at_start = impella_ever,
+  diagnosis_at_start = diagnosis
 )
-
 
 
 
@@ -218,108 +224,111 @@ test_data_actives = test_data_actives %>%
 ```
 
 # Create nonoverlapping test intervals by calendar date
+The validation dataset is from 9/1/23-8/31/24, so intervals should start on: 9/1/23, 10/15/23, 12/1/23, 1/15/24, 3/1/24, 4/15/24, 6/1/24, 7/15/24.
+
 ```{r}
+library(lubridate)
+valid_dates = c(ymd("2023-09-01"),ymd("2023-10-15"),ymd("2023-12-01"),ymd("2024-01-15"),ymd("2024-03-01"),ymd("2024-04-15"),ymd("2024-06-01"),ymd("2024-07-15"))
+
 # Subset data at certain calendar dates
 # Calculate wait time at specific calendar date
-first_int = test_data_actives %>% 
-  filter(current_date <= "2023-01-01" & current_date > "2022-12-25") %>% 
-  mutate(int = 1,
-         wait_time = wait_time + as.numeric(as.Date("2023-01-01") - current_date)) 
+# Calculate "rank" based on status (1-6) and waiting time
+  ## If status and wait time are the same, set the rank to be equal
 
-second_int = test_data_actives %>% 
-  filter(current_date <= "2023-02-15" & current_date > "2023-02-08") %>% 
-  mutate(int = 2,
-         wait_time = wait_time + as.numeric(as.Date("2023-02-15") - current_date))  
+make_eight_ints = function(dates) {
+  if (length(dates)!=8) {
+    stop("dates vector does not have length 8")
+  }
+  
+  first_int = test_data_actives %>% 
+    filter(current_date <= dates[1] & current_date > (dates[1]-days(7))) %>% 
+    mutate(int = 1,
+           wait_time = wait_time + as.numeric(dates[1] - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup
+  
+  second_int = test_data_actives %>% 
+    filter(current_date <= dates[2] & current_date > (dates[2]-days(7))) %>% 
+    mutate(int = 2,
+           wait_time = wait_time + as.numeric(as.Date("2023-02-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup  
+  
+  third_int = test_data_actives %>% 
+    filter(current_date <= dates[3] & current_date > (dates[3]-days(7))) %>% 
+    mutate(int = 3,
+           wait_time = wait_time + as.numeric(as.Date("2023-04-01") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  fourth_int = test_data_actives %>% 
+    filter(current_date <= dates[4] & current_date > (dates[4]-days(7))) %>% 
+    mutate(int = 4,
+           wait_time = wait_time + as.numeric(as.Date("2023-05-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  fifth_int = test_data_actives %>% 
+    filter(current_date <= dates[5] & current_date > (dates[5]-days(7))) %>% 
+    mutate(int = 5,
+           wait_time = wait_time + as.numeric(as.Date("2023-07-01") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  sixth_int = test_data_actives %>% 
+    filter(current_date <= dates[6] & current_date > (dates[6]-days(7))) %>% 
+    mutate(int = 6,
+           wait_time = wait_time + as.numeric(as.Date("2023-08-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  seventh_int = test_data_actives %>% 
+    filter(current_date <= dates[7] & current_date > (dates[7]-days(7))) %>% 
+    mutate(int = 7,
+           wait_time = wait_time + as.numeric(as.Date("2023-10-01") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup  
+  
+  eighth_int = test_data_actives %>% 
+    filter(current_date <= dates[8] & current_date > (dates[8]-days(7))) %>% 
+    mutate(int = 8,
+           wait_time = wait_time + as.numeric(as.Date("2023-11-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  
+  # Combine into dataset for pooled AUC
+  eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
+  return(eight_sets)
+}
+eight_sets_valid = make_eight_ints(valid_dates)
 
-third_int = test_data_actives %>% 
-  filter(current_date <= "2023-04-01" & current_date > "2023-03-26") %>% 
-  mutate(int = 3,
-         wait_time = wait_time + as.numeric(as.Date("2023-04-01") - current_date)) 
-
-fourth_int = test_data_actives %>% 
-  filter(current_date <= "2023-05-15" & current_date > "2023-05-08") %>% 
-  mutate(int = 4,
-         wait_time = wait_time + as.numeric(as.Date("2023-05-15") - current_date)) 
-
-fifth_int = test_data_actives %>% 
-  filter(current_date <= "2023-07-01" & current_date > "2023-06-28") %>% 
-  mutate(int = 5,
-         wait_time = wait_time + as.numeric(as.Date("2023-07-01") - current_date)) 
-
-sixth_int = test_data_actives %>% 
-  filter(current_date <= "2023-08-15" & current_date > "2023-08-08") %>% 
-  mutate(int = 6,
-         wait_time = wait_time + as.numeric(as.Date("2023-08-15") - current_date)) 
-
-seventh_int = test_data_actives %>% 
-  filter(current_date <= "2023-10-01" & current_date > "2023-09-25") %>% 
-  mutate(int = 7,
-         wait_time = wait_time + as.numeric(as.Date("2023-10-01") - current_date))  
-
-eighth_int = test_data_actives %>% 
-  filter(current_date <= "2023-11-15" & current_date > "2023-11-08") %>% 
-  mutate(int = 8,
-         wait_time = wait_time + as.numeric(as.Date("2023-11-15") - current_date)) 
-
-
-# Combine into dataset for pooled AUC
-eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
-
+# check coding
+eight_sets_valid %>%
+  filter(int==1) %>%
+  filter(status == 4) %>% arrange(desc(wait_time)) %>% 
+  select(PX_ID, status, wait_time, rank) %>% head
 ```
 
-# Rank patients by status and waiting time
-```{r}
-# Rank patients by status and wait time
-# If status and wait time are the same, set the rank to be equal
-
-first_int = first_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-second_int = second_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-third_int = third_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-fourth_int = fourth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-fifth_int = fifth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-sixth_int = sixth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-seventh_int = seventh_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-eighth_int = eighth_int %>% ungroup() %>% arrange(status, desc(wait_time)) %>% 
-  mutate(rank = row_number()) %>% 
-  group_by(status, wait_time) %>%
-  mutate(rank = first(rank)) %>% ungroup
-
-#check rank variable
-#Higher for higher waiting time, flip for AUC calculations if necessary
-first_int %>% filter(status == 4) %>% arrange(desc(wait_time)) %>% select(PX_ID, status, wait_time, rank)
-
-first_int %>% arrange(status) %>% select(status,rank, wait_time)
-```
 
 # Calculate predicted 6-week survival probabilities with US-CRS 2.0
+Working here - write with eight_sets_valid so that we can try out all of the potential models (models A-G).
 ```{r}
 # Extract 6 week survival probability of our model
 # Convert to vector ? (Troubleshooting the AUC problems)
@@ -357,7 +366,7 @@ eighth_int = pred_data_fun(eighth_int) %>% mutate(
 
 ```
 
-# Calculate US-CRS 1.0 log odds
+# Function to calculate US-CRS 1.0 log odds
 ```{r uscrs1}
 uscrs1 = function(albumin,bilirubin,eGFR,sodium,lvad,mcs,BNP,NTpro) {
   return(-.656*albumin
@@ -376,65 +385,8 @@ uscrs1 = function(albumin,bilirubin,eGFR,sodium,lvad,mcs,BNP,NTpro) {
 # Flip rankings so that higher = higher risk
 ```{r}
 # Flip the predictors to be higher when the candidate is higher risk of death
-# Keep out for now since we are using predicted probability of survival in AUC
 
-first_int = first_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-second_int = second_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-third_int = third_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-fourth_int = fourth_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-fifth_int = fifth_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-sixth_int = sixth_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-seventh_int = seventh_int %>%
-  ungroup() %>% mutate(
-  rank = 1/rank,
-  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
-  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
-  status_flipped = 1/as.numeric(status)
-)
-eighth_int = eighth_int %>%
+eight_sets_valid = eight_sets_valid %>% 
   ungroup() %>% mutate(
   rank = 1/rank,
   uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
@@ -444,8 +396,7 @@ eighth_int = eighth_int %>%
 )
 
 #full data for pooled roc
-eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
-save(eight_sets,file="eight-sets.Rdata")
+save(eight_sets_valid,file="eight-sets-valid.Rdata")
 ```
 
 # Plot pooled ROC across nonoverlapping intervals of test set
@@ -538,7 +489,7 @@ auc_df$Date <- rep(dates, each = 4) # each = 3
 pval_df$Date <- rep(dates, each = 6) # each = 3
 
 
-ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
+ggplot(auc_df %>% filter(model!="uscrs 1.0"), aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
   geom_line(position = position_dodge(width = 24)) +
   geom_point(position = position_dodge(width = 24),size=2.5) +
   geom_errorbar(position = position_dodge(width = 24),width=15) +
@@ -573,7 +524,7 @@ ggplot(auc_df, aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model,
   scale_color_viridis_d()
   # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
   # scale_linetype_manual(values = c("dashed","solid","solid"))
-ggsave("uscrs_auc_comparison.png", width = 6.5, height = 4, dpi = 300)
+ggsave("uscrs_auc_comparison-NEW.png", width = 6.5, height = 4, dpi = 300)
 
 # look for significant differences in AUC
 pval_df %>% filter(model=="waiting time + status",p<0.05)
@@ -594,7 +545,7 @@ ggplot(roc_df,
   theme_bw() + 
   theme(text=element_text(size=12)) +
   ylim(c(0,1))
-ggsave("uscrs_roc_comparison.png", width = 7, height = 4, dpi = 300)
+ggsave("uscrs_roc_comparison-NEW.png", width = 7, height = 4, dpi = 300)
 ```
 
 ```{r calib}

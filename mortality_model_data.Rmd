@@ -1184,8 +1184,8 @@ combined_df = combined_df %>%
 
 mort_mod_selectE = mod_select(mortality_modelB,list(
   week="+factor(week_from_baseline)",
-  impella_ever="+impella_at_start",
-  iabp_ever="+iabp_at_start",
+  impella="+impella_at_start",
+  iabp="+iabp_at_start",
   diagnosis="+diagnosis_at_start",
   chd="+chd_at_start",
   lvad_time = "+lvad_years_at_start",
