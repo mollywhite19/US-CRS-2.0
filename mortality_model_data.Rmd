@@ -1374,6 +1374,52 @@ save(mortality_modelA,mortality_modelB,mortality_modelC,
 
 ```
 
+## Function to calculate predicted survival
+Working here
+```{r}
+## function to calculate predicted survival
+### note: predicted 6-week survival will be calculated for each row of newdata; if the data are prepared for landmark modeling, they should be filtered to week 1 from each landmark; predictions will be made based on that row's covariates, assuming those are the covariates at the start of the 6-week period
+
+pred_data_fun = function(newdata,mod) {
+  # trim LVAD years to 10
+  newdata = newdata %>%
+    ungroup() %>%
+    mutate(lvad_years_at_start =
+             ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
+  
+  # create an ID variable
+  newdata$tmp_id = 1:nrow(newdata)
+  
+  # expand each row to six rows and create week_from_baseline
+  pred_data = newdata[rep(1:nrow(newdata), each = 6), ]  # Duplicate each row 6 times
+  pred_data$week_from_baseline = rep(1:6, times = nrow(newdata))
+  
+  # predict hazard of death within the week
+  pred_data$haz_dth = predict(mod,newdata=pred_data,type="response")
+
+  # calculate probability of surviving 6 weeks
+  pred_data = pred_data %>%
+    group_by(tmp_id) %>%
+    mutate(prob_surv_6wk = cumprod(1-haz_dth),
+           haz_dth_nowk = first(haz_dth)) %>%
+    slice(n()) %>%
+    ungroup() %>%
+    mutate(week_from_baseline=1,
+           prob_outcome_6wk = 1 - prob_surv_6wk) %>% 
+    select(-tmp_id)
+  
+  # return pred_data
+  return(pred_data)
+}
+save(pred_data_fun,file="mort-pred-fun.Rdata")
+
+## get predicted 6-week survival from training data, including all landmarks
+# pred_data = pred_data_fun(combined_df %>% filter(week_from_baseline==1))
+# summary(pred_data$prob_surv_6wk)
+# quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
+
+```
+
 Before the next step, the models are compared in the validation data, in the model_eval.Rmd script.
 
 ## Save final model and calculate robust standard errors
@@ -1467,38 +1513,6 @@ getHR(mortality_model_full,
 
 ## Calculate predicted survival without transplant in training data
 ```{r}
-## function to calculate predicted survival
-### note: newdata should be filtered to week 1 from each landmark; predictions will be made based on covariates at the start of that week
-
-pred_data_fun = function(newdata) {
-  # trim LVAD years to 10
-  newdata = newdata %>%
-    ungroup() %>%
-    mutate(lvad_years_at_start =
-             ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
-  
-  # create an ID variable
-  newdata$tmp_id = 1:nrow(newdata)
-  
-  # expand each row to six rows and create week_from_baseline
-  pred_data = newdata[rep(1:nrow(newdata), each = 6), ]  # Duplicate each row 6 times
-  pred_data$week_from_baseline = rep(1:6, times = nrow(newdata))
-  
-  # predict hazard of death within the week
-  pred_data$haz_dth = predict(mortality_model_full,newdata=pred_data,type="response")
-
-  # calculate probability of surviving 6 weeks
-  pred_data = pred_data %>%
-    group_by(tmp_id) %>%
-    mutate(prob_surv_6wk = cumprod(1-haz_dth)) %>%
-    slice(n()) %>%
-    ungroup() %>%
-    mutate(week_from_baseline=1) %>% select(-tmp_id)
-  
-  # return pred_data
-  return(pred_data)
-}
-
 # get predicted 6-week survival from training data, including all landmarks
 pred_data = pred_data_fun(combined_df %>% filter(week_from_baseline==1))
 summary(pred_data$prob_surv_6wk)

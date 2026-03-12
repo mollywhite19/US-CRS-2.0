@@ -326,46 +326,6 @@ eight_sets_valid %>%
   select(PX_ID, status, wait_time, rank) %>% head
 ```
 
-
-# Calculate predicted 6-week survival probabilities with US-CRS 2.0
-Working here - write with eight_sets_valid so that we can try out all of the potential models (models A-G).
-```{r}
-# Extract 6 week survival probability of our model
-# Convert to vector ? (Troubleshooting the AUC problems)
-first_int = pred_data_fun(first_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-second_int = pred_data_fun(second_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-third_int = pred_data_fun(third_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-fourth_int = pred_data_fun(fourth_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-fifth_int = pred_data_fun(fifth_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-sixth_int = pred_data_fun(sixth_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-seventh_int = pred_data_fun(seventh_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-eighth_int = pred_data_fun(eighth_int) %>% mutate(
-  pred_surv_6wk = as.vector(prob_surv_6wk)
-)
-
-```
-
 # Function to calculate US-CRS 1.0 log odds
 ```{r uscrs1}
 uscrs1 = function(albumin,bilirubin,eGFR,sodium,lvad,mcs,BNP,NTpro) {
@@ -391,59 +351,30 @@ eight_sets_valid = eight_sets_valid %>%
   rank = 1/rank,
   uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
   uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
-  prob_outcome_6wk = 1 - prob_surv_6wk,
   status_flipped = 1/as.numeric(status)
 )
-
-#full data for pooled roc
-save(eight_sets_valid,file="eight-sets-valid.Rdata")
 ```
 
-# Plot pooled ROC across nonoverlapping intervals of test set
+# Calculate predicted 6-week survival probabilities with US-CRS 2.0
+Try out all of the potential models (models A-G) in validation data (`eight_sets_valid`).
 ```{r}
-# pooled roc
-auc6wk <- Score(
-  list("uscrs" = eight_sets$prob_outcome_6wk, "waiting time + status" = eight_sets$rank, "status only" = eight_sets$status_flipped),
-  formula = Hist(time, outcome) ~ albumin + log(bilirubin+1) + eGFR + sodium + log(BNP+1)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
-  data = eight_sets %>% mutate(time = ifelse(outcome==0,time+0.001,time)),
-  cens.method = "ipcw", cens.model = "cox",
-  conf.int = TRUE,
-  times = 42,
-  metrics = c("auc"),
-  conservative = T,
-  plots = "roc"
-)
+# load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
+load("mort-pred-fun.Rdata")
 
-df = auc6wk$ROC$plotframe
-#only status dataframe
-df_status = df %>% filter(model == "status only")
+# apply to eight_sets_valid
+eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
+eight_sets_valid_modB = pred_data_fun(eight_sets_valid,mortality_modelB)
+eight_sets_valid_modC = pred_data_fun(eight_sets_valid,mortality_modelC)
+eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
+eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
+eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
+eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
 
-# Plot the ROC curve
-ggplot(df %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))), 
-       aes(x = FPR, y = TPR, color = model)) +
-  geom_line(linewidth=.95,alpha=.75) +
-  geom_point(data=df_status %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))),aes(x=FPR,y=TPR),size=2.5) +
-  scale_color_viridis_d() +
-  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
-  # title = "Pooled ROC Curve", 
-  theme_bw() + 
-  theme(text=element_text(size=14)) +
-  ylim(c(0,1))
-ggsave("pooled-roc.png",width=6.5,height=4.5)
-
-# compare AUC in pooled data
-## note: ignores patients who appear in multiple intervals
-auc6wk
-
-#                    model times    AUC  lower  upper
-#                   <fctr> <num> <char> <char> <char>
-# 1:                 uscrs     6   84.8   81.6   88.0
-# 2: waiting time + status     6   73.9   69.3   78.4
-# 3:           status only     6   74.1   69.9   78.3
-
+# new variables created by pred_data_fun
+names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
 ```
 
-# Calculate AUC in each interval
+# Working here - Calculate AUC in each interval and take average
 ```{r}
 #datasets for looping
 datasets <- list(first_int, second_int, third_int, fourth_int, 
@@ -547,6 +478,61 @@ ggplot(roc_df,
   ylim(c(0,1))
 ggsave("uscrs_roc_comparison-NEW.png", width = 7, height = 4, dpi = 300)
 ```
+
+
+
+
+
+
+
+# Plot pooled ROC across nonoverlapping intervals of test set
+```{r}
+#full data for pooled roc
+save(eight_sets_valid,file="eight-sets-valid.Rdata")
+
+# pooled roc
+auc6wk <- Score(
+  list("uscrs" = eight_sets$prob_outcome_6wk, "waiting time + status" = eight_sets$rank, "status only" = eight_sets$status_flipped),
+  formula = Hist(time, outcome) ~ albumin + log(bilirubin+1) + eGFR + sodium + log(BNP+1)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
+  data = eight_sets %>% mutate(time = ifelse(outcome==0,time+0.001,time)),
+  cens.method = "ipcw", cens.model = "cox",
+  conf.int = TRUE,
+  times = 42,
+  metrics = c("auc"),
+  conservative = T,
+  plots = "roc"
+)
+
+df = auc6wk$ROC$plotframe
+#only status dataframe
+df_status = df %>% filter(model == "status only")
+
+# Plot the ROC curve
+ggplot(df %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))), 
+       aes(x = FPR, y = TPR, color = model)) +
+  geom_line(linewidth=.95,alpha=.75) +
+  geom_point(data=df_status %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))),aes(x=FPR,y=TPR),size=2.5) +
+  scale_color_viridis_d() +
+  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
+  # title = "Pooled ROC Curve", 
+  theme_bw() + 
+  theme(text=element_text(size=14)) +
+  ylim(c(0,1))
+ggsave("pooled-roc.png",width=6.5,height=4.5)
+
+# compare AUC in pooled data
+## note: ignores patients who appear in multiple intervals
+auc6wk
+
+#                    model times    AUC  lower  upper
+#                   <fctr> <num> <char> <char> <char>
+# 1:                 uscrs     6   84.8   81.6   88.0
+# 2: waiting time + status     6   73.9   69.3   78.4
+# 3:           status only     6   74.1   69.9   78.3
+
+```
+
+# Calibration
 
 ```{r calib}
 calib <- Score(
