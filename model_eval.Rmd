@@ -25,95 +25,14 @@ library(ggplot2)
 library(splines)
 ```
 
-
-
-
-
-```{r}
-#create week variable
-#not using this rn - change to row_number() if we use?
-test_data = test_data %>% 
-  mutate(
-  week = interval_start / 7 + 1
-) %>% relocate(week, .after = CAN_LISTING_CTR_CD)
-
-
-```
-
-
-
 ```{r}
 test_data = test_data %>% mutate(can_listing_dt = as.Date(can_listing_dt),
                                  transplant_date = as.Date(transplant_date))
 
-table(test_data$status)
+table(test_data$status,useNA="ifany")
 ```
 
-
-```{r,eval=F}
-#expanding out to follow up 6 week post delisting
-test_data = test_data %>% group_by(PX_ID) %>% 
-  
-  mutate(
-    # if we have full follow-up for the week, follow for censoring (floor)
-    time_until_censor_after_delisting = 
-      case_when(row_number() == n() & !is.na(time_until_censor_after_delisting) ~ 
-                  floor(pmax(0,removal_time + time_until_censor_after_delisting - interval_stop)/7)*7,
-                T ~ NA),
-    # follow for death even w/o full week (ceiling)
-    time_until_death_after_delisting = 
-      case_when(row_number() == n() & !is.na(time_until_death_after_delisting) ~ 
-                  ceiling(pmax(0,removal_time + time_until_death_after_delisting - interval_stop)/7)*7,
-                T ~ NA)) %>%
-  
-  fill(time_until_censor_after_delisting,time_until_death_after_delisting,.direction="downup") %>%
-
-  # censor at 6 weeks
-  mutate(time_until_censor_after_delisting = case_when(
-    time_until_censor_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
-    time_until_censor_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
-    time_until_death_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
-    time_until_death_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
-    TRUE ~ time_until_censor_after_delisting
-  ),
-    # recode time to death as missing if censored
-    time_until_death_after_delisting = ifelse(!is.na(time_until_censor_after_delisting),NA,
-                                              time_until_death_after_delisting),
-    outcome = ifelse(!is.na(time_until_censor_after_delisting),0,outcome)
-    
-)
-
-## Determine delisting row and # of duplicates we need after delisting, until death or censoring
-test_data = test_data %>% group_by(PX_ID) %>% mutate(
-  delisting = case_when(
-    (!is.na(time_until_death_after_delisting) | !is.na(time_until_censor_after_delisting)) & row_number() == n() ~ 1,
-    TRUE ~ 0)
-  ) %>% ungroup() %>% mutate(
-  duplicates_after_delisting = case_when(
-    delisting == 1 & time_until_death_after_delisting > 0 ~
-      time_until_death_after_delisting/7,
-    delisting == 1 & time_until_censor_after_delisting > 0 ~ 
-      time_until_censor_after_delisting/7,
-  TRUE ~ 0))
-
-## repeat rows for the duplicates after delisting
-# and recode interval_start, interval_stop
-test_data = test_data %>%
-  slice(rep(row_number(), duplicates_after_delisting+1)) %>%
-  group_by(PX_ID) %>%
-  mutate(week=row_number()) %>%
-  group_by(PX_ID,duplicates_after_delisting) %>%
-  mutate(dup=row_number()-1) %>%
-  ungroup() %>%
-  mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
-         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop),
-         status = if_else(dup>0 & delisting == 1, "off_waitlist", status))
-
-
-```
-
-
-
+# Code waiting time at status
 ```{r}
 # wait time determined by status
 test_data = test_data %>%
@@ -128,6 +47,8 @@ test_data = test_data %>%
 
 
 ```
+
+# Rename variables "at_start" for prediction
 ```{r}
 #clean up lvad variable
 test_data = test_data %>% mutate(
@@ -153,12 +74,10 @@ test_data = test_data %>% mutate(
   impella_ever_at_start = impella_ever,
   diagnosis_at_start = diagnosis
 )
-
-
-
 ```
 
 # Calculate time to event
+Also: Remove inactive rows and trim continuous variables, for prediction.
 ```{r}
 # Time to event based on death, removal for deterioration, tx, or censoring
 
@@ -372,6 +291,12 @@ eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
 
 # new variables created by pred_data_fun
 names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
+
+# save results
+save(eight_sets_valid_modA,eight_sets_valid_modB,
+     eight_sets_valid_modC,eight_sets_valid_modD,
+     eight_sets_valid_modE,eight_sets_valid_modF,
+     eight_sets_valid_modG,file="eight-sets-valid.Rdata")
 ```
 
 # Calculate AUC in each interval and take average
@@ -410,12 +335,12 @@ getMeanAUC(eight_sets_valid_modG)
 
 
 
-
+# Working
 
 # Plot pooled ROC across nonoverlapping intervals of test set
 ```{r}
 #full data for pooled roc
-save(eight_sets_valid,file="eight-sets-valid.Rdata")
+
 
 # pooled roc
 auc6wk <- Score(
