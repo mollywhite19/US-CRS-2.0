@@ -50,10 +50,6 @@ test_data = test_data %>%
 
 # Rename variables "at_start" for prediction
 ```{r}
-#clean up lvad variable
-test_data = test_data %>% mutate(
-  durable_LVAD = ifelse(!is.na(durable_lvad_implant_dt) & current_date < durable_lvad_implant_dt, 0, durable_LVAD)
-)
 #start variables for the model testing
 test_data = test_data %>% mutate(
   bilirubin_at_start = bilirubin,
