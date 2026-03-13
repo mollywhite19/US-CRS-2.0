@@ -3,6 +3,8 @@ title: "Calibration plot"
 author: "Grace Lyden"
 date: "2025-06-11"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -11,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 rm(list=ls())
 # base::load("mortality-model.RData")
 base::load("mortality_model_test_data.RData")
+base::load("eight-sets-valid.Rdata")
 
 library(dplyr)
 library(haven)
@@ -19,6 +22,62 @@ library(ggplot2)
 library(splines)
 library(lubridate)
 library(tidyr)
+```
+
+For calibration, we can use time-varying weights by week, similar to the mortality model. First, we refit the IPW models for the probability of transplant in the test set, to account for the test-set censoring distribution. Then, we expand the validation/test set of calendar cross-sections (which are one row per PX_ID per cross-section) to include up to 6 rows for the 6 weeks follow-up, with time-varying weights per row.
+
+## Refit transplant models for IPW
+Fit the numerator and denominator models for the IPW in the test set. These are based on probabilities of receiving a transplant.
+```{r}
+## create probability for numerator of stabilized weights ##
+# we want Pr(transplant) given variables at start of 6-week window
+# for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of test_data
+
+# create 6-week windows of test_data
+test_data = test_data %>%
+  group_by(PX_ID) %>%
+  mutate(window=ceiling(row_number()/6),
+         week_from_baseline = (row_number() - 6*(window-1))) %>%
+  ungroup()
+# test_data %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
+test_data = test_data %>%
+  group_by(PX_ID,window) %>%
+  mutate(albumin_at_start = first(albumin),
+         bilirubin_at_start = first(bilirubin),
+         eGFR_at_start = first(eGFR),
+         sodium_at_start = first(sodium),
+         BNP_at_start = first(BNP),
+         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+         durable_LVAD_at_start = first(durable_LVAD),
+         short_mcs_ever_at_start = first(short_MCS_ever)) %>%
+  ungroup()
+
+# fit transplant model
+## just US-CRS variables bc anything in this numerator model has to be in the mortality model
+tx_model_first = glm(
+   transplant ~ 
+    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = test_data, family = binomial)
+
+# remove new variables from test_data
+test_data = test_data %>% select(-(window:short_mcs_ever_at_start))
+
+## create probability for denominator of stabilized weights ##
+# need prob_no_tx variable in test_data
+
+# fit chosen model
+tx_status_hemo_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + 
+     ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + 
+     status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), 
+   data = test_data, family = binomial)
+test_data$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=test_data, type = "response")
+
+# with chosen model, set probability of not receiving a transplant each week
+test_data = test_data %>%
+  mutate(prob_no_tx = 1 - fit_prob_hemo)
 ```
 
 ## Set up test data with rows after delisting, by week
@@ -89,8 +148,7 @@ test_data = test_data %>%
   ungroup() %>%
   mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
          current_date = as.Date(can_listing_dt) + interval_start,
-         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop),
-         status = if_else(dup>0 & delisting == 1, "off_waitlist", status)) %>%
+         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop)) %>%
   select(-dup)
 
 # code outcome for last row - now outcome is correct
@@ -117,7 +175,6 @@ table(test_data$transplant,test_data$delisting) # quick check
 Create start-stop data with up to 6 weeks follow-up for each PX_ID in each interval.
 
 ```{r join}
-base::load("eight-sets.Rdata")
 nrow(eight_sets);eight_sets %>% distinct(PX_ID,current_date) %>% nrow
 nrow(test_data);test_data %>% distinct(PX_ID,current_date) %>% nrow
 joindat = left_join(test_data,
@@ -173,7 +230,6 @@ joindat = joindat %>%
   ungroup
 
 # calculate numerator
-base::load("mortality-model.RData")
 joindat = joindat %>% mutate(
   prob_no_tx_start = 1 - 
     predict(tx_model_first, newdata = joindat, type = "response"),
