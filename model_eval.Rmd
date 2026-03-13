@@ -374,7 +374,92 @@ eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
 names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
 ```
 
-# Working here - Calculate AUC in each interval and take average
+# Calculate AUC in each interval and take average
+Calculate "Mean 6-Week AUC" in validation dataset (across 8 calendar cross-sections) for each potential model.
+```{r}
+getMeanAUC = function(moddata) {
+  auc_results = sapply(1:dim(table(moddata$int)),function(i) {
+    data_i <- moddata %>% filter(int==i)
+    auc_tmp <- Score(
+      list("uscrs2" = data_i$prob_outcome_6wk),
+      formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
+                eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+                durable_LVAD + short_MCS_ever + status,
+      data = data_i %>% 
+                mutate(time = ifelse(outcome == 0, time + 0.001, time)),
+      cens.method = "ipcw", cens.model = "cox",
+      conf.int = TRUE,
+      times = 42,
+      metrics = c("auc"),
+      conservative = TRUE
+    )
+    return(auc_tmp$AUC$score[["AUC"]])
+  })
+  return(mean(auc_results))
+}
+getMeanAUC(eight_sets_valid_modA)
+getMeanAUC(eight_sets_valid_modB)
+getMeanAUC(eight_sets_valid_modC)
+getMeanAUC(eight_sets_valid_modD)
+getMeanAUC(eight_sets_valid_modE)
+getMeanAUC(eight_sets_valid_modF)
+getMeanAUC(eight_sets_valid_modG)
+```
+
+
+
+
+
+
+
+# Plot pooled ROC across nonoverlapping intervals of test set
+```{r}
+#full data for pooled roc
+save(eight_sets_valid,file="eight-sets-valid.Rdata")
+
+# pooled roc
+auc6wk <- Score(
+  list("uscrs" = eight_sets$prob_outcome_6wk, "waiting time + status" = eight_sets$rank, "status only" = eight_sets$status_flipped),
+  formula = Hist(time, outcome) ~ albumin + log(bilirubin+1) + eGFR + sodium + log(BNP+1)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
+  data = eight_sets %>% mutate(time = ifelse(outcome==0,time+0.001,time)),
+  cens.method = "ipcw", cens.model = "cox",
+  conf.int = TRUE,
+  times = 42,
+  metrics = c("auc"),
+  conservative = T,
+  plots = "roc"
+)
+
+df = auc6wk$ROC$plotframe
+#only status dataframe
+df_status = df %>% filter(model == "status only")
+
+# Plot the ROC curve
+ggplot(df %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))), 
+       aes(x = FPR, y = TPR, color = model)) +
+  geom_line(linewidth=.95,alpha=.75) +
+  geom_point(data=df_status %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))),aes(x=FPR,y=TPR),size=2.5) +
+  scale_color_viridis_d() +
+  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
+  # title = "Pooled ROC Curve", 
+  theme_bw() + 
+  theme(text=element_text(size=14)) +
+  ylim(c(0,1))
+ggsave("pooled-roc.png",width=6.5,height=4.5)
+
+# compare AUC in pooled data
+## note: ignores patients who appear in multiple intervals
+auc6wk
+
+#                    model times    AUC  lower  upper
+#                   <fctr> <num> <char> <char> <char>
+# 1:                 uscrs     6   84.8   81.6   88.0
+# 2: waiting time + status     6   73.9   69.3   78.4
+# 3:           status only     6   74.1   69.9   78.3
+
+```
+
+# Calculate AUC in each interval
 ```{r}
 #datasets for looping
 datasets <- list(first_int, second_int, third_int, fourth_int, 
@@ -477,59 +562,6 @@ ggplot(roc_df,
   theme(text=element_text(size=12)) +
   ylim(c(0,1))
 ggsave("uscrs_roc_comparison-NEW.png", width = 7, height = 4, dpi = 300)
-```
-
-
-
-
-
-
-
-# Plot pooled ROC across nonoverlapping intervals of test set
-```{r}
-#full data for pooled roc
-save(eight_sets_valid,file="eight-sets-valid.Rdata")
-
-# pooled roc
-auc6wk <- Score(
-  list("uscrs" = eight_sets$prob_outcome_6wk, "waiting time + status" = eight_sets$rank, "status only" = eight_sets$status_flipped),
-  formula = Hist(time, outcome) ~ albumin + log(bilirubin+1) + eGFR + sodium + log(BNP+1)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
-  data = eight_sets %>% mutate(time = ifelse(outcome==0,time+0.001,time)),
-  cens.method = "ipcw", cens.model = "cox",
-  conf.int = TRUE,
-  times = 42,
-  metrics = c("auc"),
-  conservative = T,
-  plots = "roc"
-)
-
-df = auc6wk$ROC$plotframe
-#only status dataframe
-df_status = df %>% filter(model == "status only")
-
-# Plot the ROC curve
-ggplot(df %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))), 
-       aes(x = FPR, y = TPR, color = model)) +
-  geom_line(linewidth=.95,alpha=.75) +
-  geom_point(data=df_status %>% mutate(model=factor(model,levels=c("uscrs","status only","waiting time + status"),labels=c("US-CRS 2.0","Status (1-6)","Status (1-6) +\nWaiting Time"))),aes(x=FPR,y=TPR),size=2.5) +
-  scale_color_viridis_d() +
-  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
-  # title = "Pooled ROC Curve", 
-  theme_bw() + 
-  theme(text=element_text(size=14)) +
-  ylim(c(0,1))
-ggsave("pooled-roc.png",width=6.5,height=4.5)
-
-# compare AUC in pooled data
-## note: ignores patients who appear in multiple intervals
-auc6wk
-
-#                    model times    AUC  lower  upper
-#                   <fctr> <num> <char> <char> <char>
-# 1:                 uscrs     6   84.8   81.6   88.0
-# 2: waiting time + status     6   73.9   69.3   78.4
-# 3:           status only     6   74.1   69.9   78.3
-
 ```
 
 # Calibration
