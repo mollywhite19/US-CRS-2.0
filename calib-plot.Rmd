@@ -241,8 +241,11 @@ extend_6wk = function(eight_sets) {
            BNP_at_start = first(BNP),
            BNP_NT_Pro_at_start = first(BNP_NT_Pro),
            durable_LVAD_at_start = first(durable_LVAD),
-           short_mcs_ever_at_start = first(short_MCS_ever)) %>% 
-    ungroup
+           short_mcs_ever_at_start = first(short_MCS_ever),
+           status_at_start=first(status),
+           excep_at_start=first(Exception)) %>% 
+    ungroup %>%
+    mutate(excep_at_start=ifelse(is.na(excep_at_start),0,excep_at_start))
   
   # calculate numerator
   joindat = joindat %>% mutate(
@@ -269,10 +272,10 @@ eight_sets_valid_long = extend_6wk(eight_sets_valid)
 nrow(eight_sets_valid);nrow(eight_sets_valid_long)
 ```
 
+## Calculate calibration statistic in validation data
+Average squared difference between observed 6-week mortality within status and average predicted 6-week mortality within status, across medical urgency statuses in validation data (9/1/23-8/31/24).
 
-
-## Make calibration plot
-```{r calib}
+```{r}
 makeCalibData = function(data,q=10,risk_score="prob_outcome_6wk") {
   # group data into ntiles by expected risk
   data1 = data %>% filter(week_from_baseline==1)
@@ -282,8 +285,8 @@ makeCalibData = function(data,q=10,risk_score="prob_outcome_6wk") {
   # get average predicted risk in each ntile
   df = data1 %>% group_by(risk_grp) %>% 
     summarise(exp=mean(!!sym(risk_score)),
-              exp.05=quantile(!!sym(risk_score),.25),
-              exp.95=quantile(!!sym(risk_score),.75))
+              exp.25=quantile(!!sym(risk_score),.25),
+              exp.75=quantile(!!sym(risk_score),.75))
   
   # get observed risk in each ntile
   obs_risks = lapply(1:q,function(i) {
@@ -304,6 +307,53 @@ makeCalibData = function(data,q=10,risk_score="prob_outcome_6wk") {
   output_df = cbind.data.frame(df,obs_df)
   return(output_df)
 }
+
+# function to calculate calibration statistic by status
+## joindat should be the extended dataset by week
+## risk_score is the name of the predicted 6-week mortality
+calibStatStatus = function(joindat,risk_score) {
+  # get overall observed and expected by status
+  calib_status = lapply(1:6,function(i) {
+    makeCalibData(joindat %>% filter(status_at_start==i),q=1,risk_score) %>%
+      mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
+  })
+  
+  # # get overall observed and expected by status and exception
+  # levels = joindat %>% count(status_at_start,excep_at_start)
+  # calib_status = lapply(1:nrow(levels),
+  #                       function(xx) {
+  #   i = levels$status_at_start[xx]
+  #   j = levels$excep_at_start[xx]
+  #   makeCalibData(joindat %>% filter(status_at_start==i,excep_at_start==j),q=1,risk_score) %>%
+  #     mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+  # })
+  calib_status = do.call(rbind.data.frame,calib_status)
+  # return(calib_status %>% mutate(sqdiff=(100*(obs-exp))^2,diff=100*(obs-exp)) %>% select(status,obs,exp,sqdiff,diff))
+  
+  # calculate average squared difference bw obs and exp across statuses
+  ## do this in percent (*100) for bigger numbers
+  return(with(calib_status,mean((100*(obs-exp))^2)))
+}
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modA")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modB")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modC")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modD")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modE")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modF")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modG")
+
+
+```
+
+
+
+
+
+
+
+## Make calibration plot
+```{r calib}
+
 calibdat = makeCalibData(joindat,20)
 # calibdat1.0 = makeCalibData(joindat,20,"uscrs")
 
