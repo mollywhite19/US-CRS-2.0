@@ -21,52 +21,6 @@ library(lubridate)
 library(tidyr)
 ```
 
-## Bring in justification form data for exceptions
-```{r excep}
-curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2403/thor/ThoracicRegistration"
-just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
-    zap_formats() %>% zap_labels()
-just_form_hr_data_link = 
-  read_sas(here::here(curr_data_release, "JustFormHRDataLink.sas7bdat"), NULL) %>%  
-  zap_formats() %>% zap_labels()
-risk_strat_data_hr = 
-  read_sas(here::here(curr_data_release, "RiskStratDataHR.sas7bdat"), NULL) %>%  
-  zap_formats() %>% zap_labels()
-status_just_episode = 
-  read_sas(here::here(curr_data_release, "StatusJustEpisode.sas7bdat"), NULL) %>%
-  zap_formats() %>% zap_labels()
-
-# join everything
-justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
-                     just_form_hr_data_link %>% select(WlregAuditId,JustId),
-                     by="WlregAuditId") %>%
-  inner_join(.,
-             status_just_episode %>% select(JustId,BeginDate,EndDate),
-             by="JustId") %>%
-  inner_join(.,
-             just_form_hr %>% select(JustId,RequestedCandStatCd,Exception),
-             by="JustId") %>%
-  # EndDate is missing for people who were still at that status when data were pulled
-  mutate(EndDate = case_when(is.na(EndDate) ~ max(EndDate,na.rm=T),T ~ EndDate))
-head(justdat)
-```
-
-## Join justification data to test data if current_date between BeginDate and EndDate
-```{r joinjust}
-# keep justification forms for patients in study, on current_date (end of day)
-justdat_join = justdat %>% right_join(.,test_data %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>% mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct
-
-# join justification forms to test data
-test_data2 = test_data %>% rename(JustId_old=JustId,RequestedCandStatCd_old=RequestedCandStatCd,Exception_old=Exception) %>% left_join(.,justdat_join,by=c("PX_ID"="px_id","current_date"))
-
-## sanity checks
-nrow(test_data2);nrow(test_data)
-test_data2 %>% count(status,RequestedCandStatCd)
-test_data2 %>% count(status,Exception)
-
-# save test_data2 as test_data
-test_data=test_data2
-```
 ## Set up test data with rows after delisting, by week
 ```{r test}
 ## Create week variable
@@ -293,7 +247,7 @@ ggplot(calibdat,aes(x=exp,y=obs)) +
   theme_bw() +
   theme(text=element_text(size=14)) +
   labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
-# ggsave("calib-overall.png",width=8,height=4)
+ggsave("calib-overall-NEW.png",width=8,height=4)
 
 # by status
 joindat = joindat %>% group_by(PX_ID,grp) %>% mutate(status_at_start=first(status)) %>% ungroup
@@ -327,7 +281,7 @@ ggplot(calib_status_long,
   scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
   labs(x = "Status", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14))
-# ggsave("calib-by-status.png",width=7.5,height=6.5)
+ggsave("calib-by-status-NEW.png",width=7.5,height=6.5)
 ```
 
 
@@ -368,5 +322,5 @@ ggplot(calib_status_long,
   scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
   labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14))
-ggsave("calib-by-excep.png",width=7.5,height=6.5)
+ggsave("calib-by-excep-NEW.png",width=9.5,height=6.5)
 ```
