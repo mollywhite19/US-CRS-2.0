@@ -171,85 +171,104 @@ test_data = test_data %>%
 table(test_data$transplant,test_data$delisting) # quick check
 ```
 
-## Join test data with 8 intervals
-Create start-stop data with up to 6 weeks follow-up for each PX_ID in each interval.
+## Set up validation data for calibration analysis
 
+Join `test_data` to the eight calendar cross-sections and include 6 weeks of follow-up per PX_ID per cross-section. Calculate IPW.
 ```{r join}
-nrow(eight_sets);eight_sets %>% distinct(PX_ID,current_date) %>% nrow
+# first, combine the eight_sets_valid datasets - save predicted probs from different models as variables
+## not saving int; just going to pool all 8 sets for calibration analysis
+eight_sets_valid = full_join(eight_sets_valid_modA %>% select(PX_ID,current_date,prob_outcome_6wk_modA=prob_outcome_6wk),
+                       eight_sets_valid_modB %>% select(PX_ID,current_date,prob_outcome_6wk_modB=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modC %>% select(PX_ID,current_date,prob_outcome_6wk_modC=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modD %>% select(PX_ID,current_date,prob_outcome_6wk_modD=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modE %>% select(PX_ID,current_date,prob_outcome_6wk_modE=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modF %>% select(PX_ID,current_date,prob_outcome_6wk_modF=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modG %>% select(PX_ID,current_date,prob_outcome_6wk_modG=prob_outcome_6wk))
+names(eight_sets_valid)
+
+# confirm eight_sets and test_data are both unique by PX_ID and current_date
+nrow(eight_sets_valid);eight_sets_valid %>% distinct(PX_ID,current_date) %>% nrow
 nrow(test_data);test_data %>% distinct(PX_ID,current_date) %>% nrow
-joindat = left_join(test_data,
-          eight_sets %>%
-            select(PX_ID,current_date,prob_surv_6wk,prob_outcome_6wk,uscrs,uscrs_trim) %>%
-            mutate(include=T),by=c("PX_ID","current_date"))
 
-# recode week
-joindat = joindat %>%
-  mutate(int_start = case_when(include ~ 1, T ~ 0)) %>%
-  group_by(PX_ID) %>%
-  mutate(
-    grp = cumsum(int_start)
-  ) %>%
-  group_by(PX_ID,grp) %>%
-  mutate(week_from_baseline = row_number()) %>%
-  ungroup() %>%
-  filter(week_from_baseline<=6,grp>0)
-joindat %>% select(PX_ID,grp,week_from_baseline,current_date,interval_start,interval_stop,outcome)
-table(joindat$include)
-nrow(eight_sets)
-summary(joindat$current_date[joindat$week_from_baseline==1])
-table(joindat$outcome)
-table(eight_sets$outcome)
+# function to extend eight_sets to include 6 rows follow-up per PX_ID (per cross-section) and calculate IPW (sweight)
+## eight_sets input should be a very limited dataset with PX_ID, current_date, and variables not in test_data (predicted probabilities of 6-week survival)
+extend_6wk = function(eight_sets) {
+  # left join to test_data
+  joindat = left_join(test_data,
+                      eight_sets %>%
+                        mutate(include=T),
+                      by=c("PX_ID","current_date"))
+
+  # create 6 weeks of follow-up for each row included in eight_sets
+  joindat = joindat %>%
+    mutate(int_start = case_when(include ~ 1, T ~ 0)) %>%
+    group_by(PX_ID) %>%
+    mutate(
+      grp = cumsum(int_start)
+    ) %>%
+    group_by(PX_ID,grp) %>%
+    mutate(week_from_baseline = row_number()) %>%
+    ungroup() %>%
+    filter(week_from_baseline<=6,grp>0)
+  # joindat %>% select(PX_ID,grp,week_from_baseline,current_date,interval_start,interval_stop,outcome)
+  # table(joindat$include)
+  # nrow(eight_sets)
+  # summary(joindat$current_date[joindat$week_from_baseline==1])
+  # table(joindat$outcome)
+  # table(eight_sets$outcome)
+  
+  ## Calculate (unstabilized) weights
+  # Create weight variable based on prob_no_tx
+  joindat = joindat %>% group_by(PX_ID, grp) %>% mutate(
+    weight = 1/(cumprod(prob_no_tx))
+  ) %>% ungroup()
+  
+  # remove transplant weeks
+  joindat = joindat %>% filter(transplant == 0)
+  
+  ## look at weights
+  # with(joindat,tapply(weight,week_from_baseline,summary))
+  
+  ## calculate stabilized weights
+  
+  # get variables at start
+  joindat = joindat %>% 
+    group_by(PX_ID,grp) %>% 
+    mutate(albumin_at_start = first(albumin),
+           bilirubin_at_start = first(bilirubin),
+           eGFR_at_start = first(eGFR),
+           sodium_at_start = first(sodium),
+           BNP_at_start = first(BNP),
+           BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+           durable_LVAD_at_start = first(durable_LVAD),
+           short_mcs_ever_at_start = first(short_MCS_ever)) %>% 
+    ungroup
+  
+  # calculate numerator
+  joindat = joindat %>% mutate(
+    prob_no_tx_start = 1 - 
+      predict(tx_model_first, newdata = joindat, type = "response"),
+    prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start)) %>%
+    group_by(PX_ID, grp) %>% mutate(
+    sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+  ) %>% ungroup
+  # with(joindat,tapply(sweight,week_from_baseline,summary))
+  
+  # # truncate weights
+  # joindat = joindat %>% group_by(week_from_baseline) %>% mutate(
+  #   tweight = ifelse(sweight > quantile(sweight,probs=.98,na.rm=T), 
+  #                    quantile(sweight,probs=.98,na.rm=T), sweight),
+  #   tweight = ifelse(sweight < quantile(sweight,probs=.02,na.rm=T), 
+  #                    quantile(sweight,probs=.02,na.rm=T), tweight)) %>%
+  #   ungroup
+  # with(joindat,tapply(tweight,week_from_baseline,summary))
+  
+  return(joindat)
+}
+eight_sets_valid_long = extend_6wk(eight_sets_valid)
+nrow(eight_sets_valid);nrow(eight_sets_valid_long)
 ```
 
-## Calculate (unstabilized) weights
-```{r wts}
-# Create weight variable based on prob_no_tx
-joindat = joindat %>% group_by(PX_ID, grp) %>% mutate(
-  weight = 1/(cumprod(prob_no_tx))
-) %>% ungroup()
-
-# remove transplant weeks
-joindat = joindat %>% filter(transplant == 0)
-
-# look at weights
-with(joindat,tapply(weight,week_from_baseline,summary))
-
-## calculate stabilized weights
-
-# get variables at start
-joindat = joindat %>% 
-  group_by(PX_ID,grp) %>% 
-  mutate(albumin_at_start = first(albumin),
-         bilirubin_at_start = first(bilirubin),
-         eGFR_at_start = first(eGFR),
-         sodium_at_start = first(sodium),
-         BNP_at_start = first(BNP),
-         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
-         durable_LVAD_at_start = first(durable_LVAD),
-         short_mcs_ever_at_start = first(short_MCS_ever)) %>% 
-  ungroup
-
-# calculate numerator
-joindat = joindat %>% mutate(
-  prob_no_tx_start = 1 - 
-    predict(tx_model_first, newdata = joindat, type = "response"),
-  prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start)) %>%
-  group_by(PX_ID, grp) %>% mutate(
-  sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
-) %>% ungroup
-with(joindat,tapply(sweight,week_from_baseline,summary))
-
-# truncate weights
-joindat = joindat %>% group_by(week_from_baseline) %>% mutate(
-  tweight = ifelse(sweight > quantile(sweight,probs=.98,na.rm=T), 
-                   quantile(sweight,probs=.98,na.rm=T), sweight),
-  tweight = ifelse(sweight < quantile(sweight,probs=.02,na.rm=T), 
-                   quantile(sweight,probs=.02,na.rm=T), tweight)) %>%
-  ungroup
-with(joindat,tapply(tweight,week_from_baseline,summary))
-
-
-```
 
 
 ## Make calibration plot
