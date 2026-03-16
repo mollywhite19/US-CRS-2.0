@@ -1374,13 +1374,71 @@ save(mortality_modelA,mortality_modelB,mortality_modelC,
 
 ```
 
+### Model H: Relaxed lasso
+
+```{r}
+library(glmnet)
+
+# set full formula
+full_formula <- outcome ~ 
+    factor(week_from_baseline) + 
+    (durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start) *
+    (ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + 
+       ns(log(BNP_at_start + 1), df = 3)*BNP_NT_Pro_at_start + 
+       ns(albumin_at_start,df = 3) +
+       ns(log(bilirubin_at_start + 1), df = 3) + 
+       ns(api_at_start,df=3) + ns(papi_at_start,df=3) + 
+       ns(cpo_at_start,df=3)) +
+    diagnosis_at_start + 
+    ns(lvad_years_at_start,df=3,knots=c(1,3))
+
+# which rows have nonmissing IPW?
+lasso_rows = which(!is.na(combined_df$sweight))
+
+# save the terms (knots) for prediction
+mf_train <- model.frame(full_formula, data = combined_df[lasso_rows, ])
+orig_terms <- attr(mf_train, "terms")
+
+# put data in model.matrix
+x_matrix <- model.matrix(orig_terms, data = combined_df)[, -1]
+
+# fit CV lasso to select predictors
+cv_fit <- cv.glmnet(x=x_matrix[lasso_rows,], 
+                    y=combined_df$outcome[lasso_rows], 
+                    weights=combined_df$sweight[lasso_rows],
+                    family = "binomial",
+                    alpha = 1)
+
+# get coefficients at lambda.1se
+lasso_coefs <- coef(cv_fit, s = "lambda.1se")
+print(lasso_coefs[which(lasso_coefs!=0),])
+selected_vars <- rownames(lasso_coefs)[which(lasso_coefs != 0)][-1]
+
+# fit (unpenalized) glm with selected predictors
+x_selected <- x_matrix[, selected_vars, drop=F]
+mortality_modelH = glm(
+  combined_df$outcome ~ x_selected,
+  weights = combined_df$sweight, family = binomial)
+AIC(mortality_modelH) # 71728.83
+length(coef(mortality_modelH)) # 49
+
+# save lasso model
+save(mortality_modelH,file="mortality-model-lasso-options.Rdata")
+
+```
+
+
 ## Function to calculate predicted survival
-Working here
 ```{r}
 ## function to calculate predicted survival
 ### note: predicted 6-week survival will be calculated for each row of newdata; if the data are prepared for landmark modeling, they should be filtered to week 1 from each landmark; predictions will be made based on that row's covariates, assuming those are the covariates at the start of the 6-week period
 
-pred_data_fun = function(newdata,mod) {
+## need in the environment for lasso:
+# lasso_orig_terms
+# lasso_selected_vars
+
+lasso_orig_terms = orig_terms; lasso_selected_vars = selected_vars
+pred_data_fun = function(newdata,mod,lasso=F) {
   # trim LVAD years to 10
   newdata = newdata %>%
     ungroup() %>%
@@ -1394,9 +1452,16 @@ pred_data_fun = function(newdata,mod) {
   pred_data = newdata[rep(1:nrow(newdata), each = 6), ]  # Duplicate each row 6 times
   pred_data$week_from_baseline = rep(1:6, times = nrow(newdata))
   
-  # predict hazard of death within the week
-  pred_data$haz_dth = predict(mod,newdata=pred_data,type="response")
-
+  if (lasso) {
+    mf_pred_data <- model.frame(delete.response(lasso_orig_terms), data=pred_data)
+    x_pred_data <- model.matrix(delete.response(lasso_orig_terms), data = mf_pred_data)[, -1]
+    x_pred_data_selected <- x_pred_data[, lasso_selected_vars, drop = F]
+    pred_data$haz_dth <- predict(mod,newdata=list(x_selected = x_pred_data_selected),type="response")
+  } else {
+    # predict hazard of death within the week
+    pred_data$haz_dth = predict(mod,newdata=pred_data,type="response")
+  }
+  
   # calculate probability of surviving 6 weeks
   pred_data = pred_data %>%
     group_by(tmp_id) %>%
@@ -1411,7 +1476,7 @@ pred_data_fun = function(newdata,mod) {
   # return pred_data
   return(pred_data)
 }
-save(pred_data_fun,file="mort-pred-fun.Rdata")
+save(pred_data_fun,lasso_orig_terms,lasso_selected_vars,file="mort-pred-fun.Rdata")
 
 ## get predicted 6-week survival from training data, including all landmarks
 # pred_data = pred_data_fun(combined_df %>% filter(week_from_baseline==1))
@@ -1422,7 +1487,13 @@ save(pred_data_fun,file="mort-pred-fun.Rdata")
 
 Before the next step, the models are compared in the validation data, in the model_eval.Rmd script.
 
+
+
+
+
+
 ## Save final model and calculate robust standard errors
+Working here.
 ```{r}
 
 mortality_model_full = glm(

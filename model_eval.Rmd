@@ -12,6 +12,7 @@ rm(list = ls())
 # load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
 # Grace
 base::load("mortality-model-options.Rdata")
+base::load("mortality-model-lasso-options.Rdata")
 base::load("mortality_model_test_data.RData")
 library(rms)
 library(tidyr)
@@ -284,6 +285,7 @@ eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
 eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
 eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
 eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
+eight_sets_valid_modH = pred_data_fun(eight_sets_valid,mortality_modelH,lasso=T)
 
 # new variables created by pred_data_fun
 names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
@@ -292,7 +294,8 @@ names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_
 save(eight_sets_valid_modA,eight_sets_valid_modB,
      eight_sets_valid_modC,eight_sets_valid_modD,
      eight_sets_valid_modE,eight_sets_valid_modF,
-     eight_sets_valid_modG,file="eight-sets-valid.Rdata")
+     eight_sets_valid_modG,eight_sets_valid_modH,
+     file="eight-sets-valid.Rdata")
 ```
 
 # Calculate AUC in each interval and take average
@@ -325,6 +328,7 @@ getMeanAUC(eight_sets_valid_modD)
 getMeanAUC(eight_sets_valid_modE)
 getMeanAUC(eight_sets_valid_modF)
 getMeanAUC(eight_sets_valid_modG)
+getMeanAUC(eight_sets_valid_modH)
 ```
 
 

@@ -183,7 +183,8 @@ eight_sets_valid = full_join(eight_sets_valid_modA %>% select(PX_ID,current_date
   full_join(.,eight_sets_valid_modD %>% select(PX_ID,current_date,prob_outcome_6wk_modD=prob_outcome_6wk)) %>%
   full_join(.,eight_sets_valid_modE %>% select(PX_ID,current_date,prob_outcome_6wk_modE=prob_outcome_6wk)) %>%
   full_join(.,eight_sets_valid_modF %>% select(PX_ID,current_date,prob_outcome_6wk_modF=prob_outcome_6wk)) %>%
-  full_join(.,eight_sets_valid_modG %>% select(PX_ID,current_date,prob_outcome_6wk_modG=prob_outcome_6wk))
+  full_join(.,eight_sets_valid_modG %>% select(PX_ID,current_date,prob_outcome_6wk_modG=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modH %>% select(PX_ID,current_date,prob_outcome_6wk_modH=prob_outcome_6wk))
 names(eight_sets_valid)
 
 # confirm eight_sets and test_data are both unique by PX_ID and current_date
@@ -341,6 +342,7 @@ calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modD")
 calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modE")
 calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modF")
 calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modG")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modH")
 
 
 ```
@@ -349,7 +351,7 @@ calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modG")
 
 
 
-
+# Working
 
 ## Make calibration plot
 ```{r calib}
