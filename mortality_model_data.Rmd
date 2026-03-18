@@ -1803,6 +1803,9 @@ ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)",mo
   theme(text=element_text(size=14))
 ggsave("lab-coefs-by-splinetype.png",width=7.5,height=5,dpi=300)
 
+# save mortality_modelE_linear
+save(mortality_modelE_linear,file="mortality-modelE-linear.Rdata")
+
 ```
 
 
