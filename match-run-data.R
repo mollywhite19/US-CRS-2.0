@@ -24,7 +24,7 @@ load("discrete_data_preSplit.Rdata") # df_final
 
 # # load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
 # ## from mortality_model_data.Rmd
-# load("mort-pred-fun.Rdata")
+load("mort-pred-fun.Rdata")
 
 # reduce dataset to pre-Dec 2024
 summary(df_final$current_date)
@@ -72,42 +72,47 @@ mrdat = mrdat %>%
     T ~ BNP_at_start)
   )
 
-# code up a new pred_data_fun - no need for full survival probabilities, just first-week hazard
-pred_data_fun1 = function(newdata,mod,lasso=F) {
-  # trim LVAD years to 10
-  pred_data = newdata %>%
-    ungroup() %>%
-    mutate(lvad_years_at_start =
-             ifelse(lvad_years_at_start>10,10,lvad_years_at_start),
-           week_from_baseline = 1)
-  
-  if (lasso) {
-    mf_pred_data <- model.frame(delete.response(lasso_orig_terms), data=pred_data)
-    x_pred_data <- model.matrix(delete.response(lasso_orig_terms), data = mf_pred_data)[, -1]
-    x_pred_data_selected <- x_pred_data[, lasso_selected_vars, drop = F]
-    pred_data$haz_dth <- predict(mod,newdata=list(x_selected = x_pred_data_selected),type="response")
-  } else {
-    # predict hazard of death within the week
-    pred_data$haz_dth = predict(mod,newdata=pred_data,type="response")
-  }
-  
-  # calculate probability of surviving 6 weeks
-  pred_data = pred_data %>%
-    mutate(log_haz_dth = log(haz_dth))
-  
-  # return pred_data
-  return(pred_data)
-}
+# # code up a new pred_data_fun - no need for full survival probabilities, just first-week hazard
+# pred_data_fun1 = function(newdata,mod,lasso=F) {
+#   # trim LVAD years to 10
+#   pred_data = newdata %>%
+#     ungroup() %>%
+#     mutate(lvad_years_at_start =
+#              ifelse(lvad_years_at_start>10,10,lvad_years_at_start),
+#            week_from_baseline = 1)
+#   
+#   if (lasso) {
+#     mf_pred_data <- model.frame(delete.response(lasso_orig_terms), data=pred_data)
+#     x_pred_data <- model.matrix(delete.response(lasso_orig_terms), data = mf_pred_data)[, -1]
+#     x_pred_data_selected <- x_pred_data[, lasso_selected_vars, drop = F]
+#     pred_data$haz_dth <- predict(mod,newdata=list(x_selected = x_pred_data_selected),type="response")
+#   } else {
+#     # predict hazard of death within the week
+#     pred_data$haz_dth = predict(mod,newdata=pred_data,type="response")
+#   }
+#   
+#   # calculate probability of surviving 6 weeks
+#   pred_data = pred_data %>%
+#     mutate(log_haz_dth = log(haz_dth))
+#   
+#   # return pred_data
+#   return(pred_data)
+# }
 
 # calculate predicted probabilities
-mrdat = pred_data_fun1(mrdat,mortality_modelC) %>%
-  rename(haz_dth_modC = haz_dth, log_haz_dth_modC = log_haz_dth) %>%
-  pred_data_fun1(.,mortality_modelE) %>%
-  rename(haz_dth_modE = haz_dth, log_haz_dth_modE = log_haz_dth)
+mrdat = pred_data_fun(mrdat,mortality_modelC) %>%
+  mutate(log_haz_dth=log(haz_dth)) %>%
+  rename(haz_dth_modC = haz_dth, log_haz_dth_modC = log_haz_dth,
+         prob_outcome_6wk_modC = prob_outcome_6wk, prob_surv_6wk_modC = prob_surv_6wk) %>%
+  pred_data_fun(.,mortality_modelE_linear,linear_spline=T) %>%
+  mutate(log_haz_dth=log(haz_dth)) %>%
+  rename(haz_dth_modE = haz_dth, log_haz_dth_modE = log_haz_dth,
+         prob_outcome_6wk_modE = prob_outcome_6wk, prob_surv_6wk_modE = prob_surv_6wk)
 
 # select PX_ID, current_date, USCRS 2.0 log hazards
 mrdat0 = mrdat %>%
-  select(PX_ID,current_date,log_haz_dth_modC,log_haz_dth_modE)
+  select(PX_ID,current_date,log_haz_dth_modC,prob_outcome_6wk_modC,prob_surv_6wk_modC,
+         log_haz_dth_modE,prob_outcome_6wk_modE,prob_surv_6wk_modE)
 summary(mrdat0$log_haz_dth_modC) # no missing, all negative bc probability
 summary(mrdat0$log_haz_dth_modE) # no missing, all negative bc probability
 
