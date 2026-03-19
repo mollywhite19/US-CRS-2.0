@@ -349,7 +349,6 @@ getMeanAUC(eight_sets_test_modC) # .807
 getMeanAUC(eight_sets_test_modE) # .798
 ```
 
-# Working
 # Calculate AUC in each interval of test set
 ```{r}
 # create one test set with both model predictions

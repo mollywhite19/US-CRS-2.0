@@ -29,6 +29,7 @@ model-eval.Rmd
 - Calculates time-dependent AUC in calendar cross-sections of validation set and test set
 - Inputs: mortality-model-options.Rdata, mortality-model-lasso-options.Rdata, mortality_model_test_data.RData, mort-pred-fun.Rdata
 - Output: eight-sets-valid.Rdata (8 calendar cross-sections in validation data with model predictions)
+- Output: eight-sets-test.Rdata (8 calendar cross-sections in test data with model predictions)
 
 calib-plot.Rmd
 
