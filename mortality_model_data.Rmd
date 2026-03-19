@@ -1808,113 +1808,81 @@ save(mortality_modelE_linear,file="mortality-modelE-linear.Rdata")
 
 ```
 
-
-
-
-
-# Old
-
 ## Save final model and calculate robust standard errors
+After all comparisons in validation and test data, Model C and E have similar performance, but Model C may be preferable for its parsimony. Let's print out those coefficients and robust standard errors.
 ```{r}
-
-mortality_model_full = glm(
-  outcome ~ 
-    factor(week_from_baseline) +
-    ns(albumin_at_start,df=3) + 
-    ns(log(bilirubin_at_start + 1),df=3)*durable_LVAD_at_start + 
-    ns(eGFR_at_start,df=3)*durable_LVAD_at_start + 
-    ns(log(BNP_at_start + 1),df=3)*BNP_NT_Pro_at_start*durable_LVAD_at_start + 
-    ns(sodium_at_start,df=3) + 
-    durable_LVAD_at_start + 
-    short_mcs_ever_at_start +
-    ns(lvad_years_at_start,df=3,knots=c(1,3)) + #,knots=c(6,8)) +
-    ns(api_at_start,df=3) +
-    ns(papi_at_start,df=3), 
-  data = combined_df,
-  weights = sweight, family = binomial)
-AIC(mortality_model_full) # 62172.65
-
-# look at model
-summary(mortality_model_full)
-
-# look at knots for LVAD years
-attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"knots")
-attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"Boundary.knots")
-
-# make dataset of knots
-knotsdat = lapply(1:length(colnames(mortality_model_full$model)),function(i) {
-  coef_name = colnames(mortality_model_full$model)[i]
-  inner.knots = attr((mortality_model_full$model)[[coef_name]],"knots")
-  outer.knots = attr((mortality_model_full$model)[[coef_name]],"Boundary.knots")
-  if (!is.null(inner.knots)) {
-    return(data.frame(coef_name,knot1=outer.knots[1],knot2=inner.knots[1],
-                    knot3=inner.knots[2],knot4=outer.knots[2]))
-  }
-})
-knotsdat = do.call(rbind.data.frame,knotsdat)
-write.csv(knotsdat,file="knots.csv",row.names=F)
+# # look at knots for LVAD years
+# attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"knots")
+# attr(mortality_model_full$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"Boundary.knots")
+# 
+# # make dataset of knots
+# knotsdat = lapply(1:length(colnames(mortality_model_full$model)),function(i) {
+#   coef_name = colnames(mortality_model_full$model)[i]
+#   inner.knots = attr((mortality_model_full$model)[[coef_name]],"knots")
+#   outer.knots = attr((mortality_model_full$model)[[coef_name]],"Boundary.knots")
+#   if (!is.null(inner.knots)) {
+#     return(data.frame(coef_name,knot1=outer.knots[1],knot2=inner.knots[1],
+#                     knot3=inner.knots[2],knot4=outer.knots[2]))
+#   }
+# })
+# knotsdat = do.call(rbind.data.frame,knotsdat)
+# write.csv(knotsdat,file="knots.csv",row.names=F)
 
 # get robust SEs
-mortality_model_full_VCOV = vcovCL(mortality_model_full, cluster = ~ PX_ID)
-mortality_model_full_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_model_full)),function(var_interest) {
-  bind_cols(var=var_interest,getHR(mortality_model_full,vars=var_interest,cov=mortality_model_full_VCOV))
+mortality_modelC_VCOV = vcovCL(mortality_modelC, cluster = ~ PX_ID)
+mortality_modelC_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_modelC)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_modelC,vars=var_interest,cov=mortality_modelC_VCOV))
 }))
-mortality_model_full_sum
-mortality_model_sum_coef = do.call(rbind.data.frame,lapply(names(coef(mortality_model_full)),function(var_interest) {
-  bind_cols(var=var_interest,getHR(mortality_model_full,vars=var_interest,cov=mortality_model_full_VCOV,transform=F))
+mortality_modelC_sum_coef = do.call(rbind.data.frame,lapply(names(coef(mortality_modelC)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_modelC,vars=var_interest,cov=mortality_modelC_VCOV,transform=F))
 }))
-mortality_model_sum_coef
 
 # make supplemental table of coefficients
-write.csv(mortality_model_sum_coef %>% rename(coef=xb) %>% mutate_at(.vars=vars(coef,se,lowCI,highCI),round,digits=3) %>% mutate(p=pval_format(p)),
-          file="mortality-model-coefs.csv",row.names=F)
+write.csv(mortality_modelC_sum_coef %>% rename(coef=xb) %>% mutate_at(.vars=vars(coef,se,lowCI,highCI),round,digits=3) %>% mutate(p=pval_format(p)),
+          file="mortality-modelC-coefs.csv",row.names=F)
 ```
 
 ## Device hazard ratios: ECMO/surgical MCS, impella, IABP
 ```{r stmcs}
-mortality_model_full_sum[mortality_model_full_sum$var=="short_mcs_ever_at_start",]
+mortality_modelC_sum[mortality_modelC_sum$var=="short_mcs_ever_at_start",]
 
 # model w/ impella and iabp
-mort_impella_sum[mort_impella_sum$var=="short_mcs_ever_at_start",]
-mort_impella_sum[mort_impella_sum$var=="impella_at_start",]
-mort_impella_sum[mort_impella_sum$var=="iabp_at_start",]
+mortality_modelC_sum[mortality_modelC_sum$var=="short_mcs_ever_at_start",]
+mortality_modelC_sum[mortality_modelC_sum$var=="impella_at_start",]
+mortality_modelC_sum[mortality_modelC_sum$var=="iabp_at_start",]
+mortality_modelC_sum[mortality_modelC_sum$var=="durable_LVAD_at_start",]
 ```
 
-## Durable LVAD hazard ratio at average lab values
+<!-- ## Durable LVAD hazard ratio at average lab values -->
 ```{r lvad}
-# all the terms with durable LVAD
-lvad_termnames = (names(coef(mortality_model_full)))[grepl("LVAD",names(coef(mortality_model_full)))]
-lvad_termnames
-
-## first get the splines for average lab values
-knotsdat$coef_name
-rownames(knotsdat) = c("albumin","bilirubin","eGFR","BNP","sodium","lvad_years","api","papi")
-bili_avg_ns = ns(log(mean(combined_df$bilirubin_at_start)+1),3,knots=as.numeric(knotsdat["bilirubin",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["bilirubin",c("knot1","knot4")]))
-egfr_avg_ns = ns(mean(combined_df$eGFR_at_start),3,knots=as.numeric(knotsdat["eGFR",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["eGFR",c("knot1","knot4")]))
-bnp_avg_ns = ns(log(mean(combined_df$BNP_at_start[combined_df$BNP_NT_Pro==0])+1),3,knots=as.numeric(knotsdat["BNP",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["BNP",c("knot1","knot4")]))
-sod_avg_ns = ns(mean(combined_df$sodium_at_start),3,knots=as.numeric(knotsdat["sodium",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["sodium",c("knot1","knot4")]))
-
-# now get hazard ratio for LVAD (just started, years=0) at average lab values
-lvad_termnames
-getHR(mortality_model_full,
-      vars=lvad_termnames,
-      comb=c(1,bili_avg_ns,egfr_avg_ns,bnp_avg_ns,0,0,0,0),
-      cov=mortality_model_full_VCOV)
+# # all the terms with durable LVAD
+# lvad_termnames = (names(coef(mortality_model_full)))[grepl("LVAD",names(coef(mortality_model_full)))]
+# lvad_termnames
+# 
+# ## first get the splines for average lab values
+# knotsdat$coef_name
+# rownames(knotsdat) = c("albumin","bilirubin","eGFR","BNP","sodium","lvad_years","api","papi")
+# bili_avg_ns = ns(log(mean(combined_df$bilirubin_at_start)+1),3,knots=as.numeric(knotsdat["bilirubin",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["bilirubin",c("knot1","knot4")]))
+# egfr_avg_ns = ns(mean(combined_df$eGFR_at_start),3,knots=as.numeric(knotsdat["eGFR",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["eGFR",c("knot1","knot4")]))
+# bnp_avg_ns = ns(log(mean(combined_df$BNP_at_start[combined_df$BNP_NT_Pro==0])+1),3,knots=as.numeric(knotsdat["BNP",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["BNP",c("knot1","knot4")]))
+# sod_avg_ns = ns(mean(combined_df$sodium_at_start),3,knots=as.numeric(knotsdat["sodium",c("knot2","knot3")]),Boundary.knots=as.numeric(knotsdat["sodium",c("knot1","knot4")]))
+# 
+# # now get hazard ratio for LVAD (just started, years=0) at average lab values
+# lvad_termnames
+# getHR(mortality_model_full,
+#       vars=lvad_termnames,
+#       comb=c(1,bili_avg_ns,egfr_avg_ns,bnp_avg_ns,0,0,0,0),
+#       cov=mortality_model_full_VCOV)
 
 ```
 
 ## Calculate predicted survival without transplant in training data
+Using Model C.
 ```{r}
 # get predicted 6-week survival from training data, including all landmarks
-pred_data = pred_data_fun(combined_df %>% filter(week_from_baseline==1))
+pred_data = pred_data_fun(pred_data,mortality_modelC)
 summary(pred_data$prob_surv_6wk)
 quantile(pred_data$prob_surv_6wk,probs=seq(0,.25,.05))
-
-## SAVE MORTALITY MODEL
-# also, function to calculate predicted 6-week survival
-# also, model for numerator of stabilized weights
-save(mortality_model_full,pred_data_fun,tx_model_first,mort_impella,file="mortality-model.RData")
-save(combined_df,file="mortality-df.RData")
 
 # summarize survival probability by status
 with(pred_data,tapply(prob_surv_6wk,status_at_start,summary))
@@ -1928,351 +1896,351 @@ ggplot(pred_data %>% filter(!is.na(status),!(status=="inactive")),
   labs(x = "Status", y = "6-Week Survival Probability") +
   # title = "Figure 1: Box plots of predicted 6-week survival without transplant\nin adult heart candidates, 2019-2022, by status"
   theme_bw()
-ggsave("pred-by-status-NEW.png",width=6,height=4)
+ggsave("pred-by-status-modelC.png",width=6,height=4)
 ```
 
-## Calculate 6-week survival by time on LVAD
+<!-- ## Calculate 6-week survival by time on LVAD -->
 ```{r}
-# Map the 6-week probability to the status system
-mortality_model_status = glm(
-  outcome ~ status_at_start,
-  data = combined_df,
-  weights = weight, # in the absence of transplant
-  family = binomial)
-haz_dth_status = predict(mortality_model_status,newdata=data.frame(status_at_start=factor(1:6,levels=levels(combined_df$status_at_start))),type="response")
-prob_surv_6wk_status = (1-haz_dth_status)^6
-prob_surv_6wk_status
-
-# how many LVAD years do you need to move from status 4 to status 3?
-
-# set values for predicting
-new_data_lvad <- data.frame(
-  albumin_at_start = mean(pred_data$albumin_at_start[pred_data$durable_LVAD_at_start==1]),
-  bilirubin_at_start = mean(pred_data$bilirubin_at_start[pred_data$durable_LVAD_at_start==1]),
-  eGFR_at_start = mean(pred_data$eGFR_at_start[pred_data$durable_LVAD_at_start==1]),
-  BNP_at_start = mean(pred_data$BNP_at_start[pred_data$durable_LVAD_at_start==1 & 
-                                               pred_data$BNP_NT_Pro_at_start=="0"]),
-  BNP_NT_Pro_at_start = "0",
-  sodium_at_start = mean(pred_data$sodium_at_start[pred_data$durable_LVAD_at_start==1]),
-  durable_LVAD_at_start = 1,
-  short_mcs_ever_at_start = 0,
-  cpo_at_start = mean(pred_data$cpo_at_start[pred_data$durable_LVAD_at_start==1]),
-  api_at_start = mean(pred_data$api_at_start[pred_data$durable_LVAD_at_start==1]),
-  papi_at_start = mean(pred_data$papi_at_start[pred_data$durable_LVAD_at_start==1]),
-  lvad_years_at_start = seq(0,10,.2),
-  impella_at_start=0,iabp_at_start=0
-)
-head(new_data_lvad)
-pred_lvad <- pred_data_fun(new_data_lvad)
-
-# make plot
-## add distribution of years on LVAD
-## add lines for Status 3 and 4
-ggplot(pred_lvad, aes(x = lvad_years_at_start, y = prob_surv_6wk)) +
-  geom_line(size = 1) +
-  labs(
-    #title = "Effect of LVAD years on 6-week survival probability in durable LVAD patients",
-    x = "Years with LVAD",
-    y = "6-Week Survival Probability"#survival without transplant"
-  ) +
-  theme_bw() + 
-  coord_cartesian(xlim=c(0,10),
-                  ylim=c(.97,1)) +
-  scale_x_continuous(breaks=seq(0,10,1)) +
-  geom_hline(yintercept=prob_surv_6wk_status["3"]) +
-  geom_text(aes(4,prob_surv_6wk_status["3"],label="Status 3",vjust=-1)) +
-  geom_hline(yintercept=prob_surv_6wk_status["4"]) +
-  geom_text(aes(4,prob_surv_6wk_status["4"],label="Status 4",vjust=-1))
-ggsave("pred-by-LVADtime-NEW.png",width=6,height=4)
-
-# distribution of time on LVAD in training data, including all landmarks
-summary(pred_data$lvad_years_at_start[pred_data$durable_LVAD_at_start==1])
-```
-
-
-## Summarize spline effects by LVAD vs not
-```{r}
-## LVAD interactions with: bilirubin, BNP, eGFR
-
-## bilirubin
-bili_range = with(pred_data,seq(min(log(bilirubin_at_start+1)),max(log(bilirubin_at_start+1)),length.out=200))
-bili_spl = ns(bili_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"Boundary.knots"))
-bili_rr = cbind.data.frame(
-  bilirubin_trans = rep(bili_range,2),
-  durable_lvad = c(rep(0,length(bili_range)),rep(1,length(bili_range))),
-  rbind.data.frame(
-    do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("bili",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})),
-    do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("bili",names(coef(mortality_model_full)))],
-                  comb=rep(row,2),
-                  cov=mortality_model_full_VCOV)})))) %>%
-  mutate(bilirubin=exp(bilirubin_trans)-1)
-# ggplot(bili_rr %>% mutate(durable_lvad=factor(durable_lvad)),
-#        aes(x=exp(bilirubin_trans)-1,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
-#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-#   geom_line(color="black",linewidth=.75) +
-#   geom_hline(yintercept=1,linetype=2) +
-#   scale_y_continuous(trans='log2',minor_breaks=NULL,
-#                      breaks=c(.25,.5,1,2,4,8),limits=c(.25,8),
-#                      oob = scales::rescale_none) +
-#   scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
-#   labs(x="Bilirubin",y="Adjusted hazard ratio (95% CI)",
-#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-#   theme_bw() +
-#   theme(text=element_text(size=14))
-
-## eGFR
-egfr_range = with(pred_data,seq(min(eGFR_at_start),max(eGFR_at_start),length.out=200))
-egfr_spl = ns(egfr_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(eGFR_at_start, df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(eGFR_at_start, df = 3)`,"Boundary.knots"))
-egfr_rr = cbind.data.frame(
-  egfr = rep(egfr_range,2),
-  durable_lvad = c(rep(0,length(egfr_range)),rep(1,length(egfr_range))),
-  rbind.data.frame(
-    do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("eGFR",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})),
-    do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("eGFR",names(coef(mortality_model_full)))],
-                  comb=rep(row,2),
-                  cov=mortality_model_full_VCOV)}))))
-# ggplot(egfr_rr %>% mutate(durable_lvad=factor(durable_lvad)),
-#        aes(x=egfr,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
-#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-#   geom_line(color="black",linewidth=.75) +
-#   geom_hline(yintercept=1,linetype=2) +
-#   scale_y_continuous(trans='log2',minor_breaks=NULL,
-#                      breaks=c(.25,.5,1,2,4,8),limits=c(.25,8),
-#                      oob = scales::rescale_none) +
-#   scale_x_continuous(breaks=seq(0,120,20),limits=c(0,120),oob = scales::rescale_none) +
-#   labs(x="eGFR",y="Adjusted hazard ratio (95% CI)",
-#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-#   theme_bw() +
-#   theme(text=element_text(size=14))
-
-# sodium
-sod_range = with(pred_data,seq(min(sodium_at_start),max(sodium_at_start),length.out=200))
-sod_spl = ns(sod_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(sodium_at_start, df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(sodium_at_start, df = 3)`,"Boundary.knots"))
-sod_rr = cbind.data.frame(
-  sodium = rep(sod_range,2),
-  durable_lvad = c(rep(0,length(sod_range)),rep(1,length(sod_range))),
-  rbind.data.frame(
-    do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("sodium",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})),
-    do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("sodium",names(coef(mortality_model_full)))],
-                  comb=row,#rep(row,2),
-                  cov=mortality_model_full_VCOV)}))))
-# ggplot(sod_rr %>% mutate(durable_lvad=factor(durable_lvad)),
-#        aes(x=sodium,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
-#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-#   geom_line(color="black",linewidth=.75) +
-#   geom_hline(yintercept=1,linetype=2) +
-#   # scale_y_continuous(trans='log2',minor_breaks=NULL,
-#   #                    breaks=2^(-8:1),limits=c(.0005,2),
-#   #                    oob = scales::rescale_none) +
-#   # scale_x_continuous(breaks=seq(100,200,20),limits=c(100,200),oob = scales::rescale_none) +
-#   labs(x="Sodium",y="Adjusted hazard ratio (95% CI)",
-#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-#   theme_bw() +
-#   theme(text=element_text(size=14))
-
-## albumin
-alb_range = with(pred_data,seq(min(albumin_at_start),max(albumin_at_start),length.out=200))
-alb_spl = ns(alb_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(albumin_at_start, df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(albumin_at_start, df = 3)`,"Boundary.knots"))
-alb_rr = cbind.data.frame(
-  albumin = rep(alb_range,2),
-  durable_lvad = c(rep(0,length(alb_range)),rep(1,length(alb_range))),
-  rbind.data.frame(
-    do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("albumin",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})),
-    do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("albumin",names(coef(mortality_model_full)))],
-                  comb=row,#rep(row,2),
-                  cov=mortality_model_full_VCOV)}))))
-# ggplot(alb_rr %>% mutate(durable_lvad=factor(durable_lvad)),
-#        aes(x=albumin,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
-#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-#   geom_line(color="black",linewidth=.75) +
-#   geom_hline(yintercept=1,linetype=2) +
-#   scale_y_continuous(trans='log2',minor_breaks=NULL,
-#                      breaks=c(.125/2,.125,.25,.5,1,2),limits=c(.01,2),
-#                      oob = scales::rescale_none) +
-#   # scale_x_continuous(breaks=seq(100,200,20),limits=c(100,200),oob = scales::rescale_none) +
-#   labs(x="Albumin",y="Adjusted hazard ratio (95% CI)",
-#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-#   theme_bw() +
-#   theme(text=element_text(size=14))
-
-# BNP
-bnp_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==0),
-                  seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
-bnp_nt_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==1),
-                  seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
-bnp_spl = ns(c(bnp_range,bnp_nt_range),df=3,
-              knots=attr(mortality_model_full$model$`ns(log(BNP_at_start + 1), df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(log(BNP_at_start + 1), df = 3)`,"Boundary.knots"))
-bnp_rr = cbind.data.frame(
-  bnp_trans = rep(c(bnp_range,bnp_nt_range),2),
-  bnp_nt_pro = rep(c(rep(0,length(bnp_range)),rep(1,length(bnp_nt_range))),2),
-  durable_lvad = c(rep(0,length(c(bnp_range,bnp_nt_range))),rep(1,length(c(bnp_range,bnp_nt_range)))),
-  rbind.data.frame(
-    # BNP_NT_Pro=0, LVAD=0
-    do.call(rbind.data.frame,apply(bnp_spl[1:200,],1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full))) & !grepl("BNP_NT",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})),
-    # BNP_NT_Pro=1, LVAD=0
-    do.call(rbind.data.frame,apply(bnp_spl[201:400,],1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full)))][1:7],
-                  comb=c(row,1,row),
-                  cov=mortality_model_full_VCOV)})),
-    # BNP_NT_Pro=0, LVAD=1
-    do.call(rbind.data.frame,apply(bnp_spl[1:200,],1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full))) & !grepl("BNP_NT",names(coef(mortality_model_full)))],
-                  comb=rep(row,2),
-                  cov=mortality_model_full_VCOV)})),
-    # BNP_NT_Pro=1, LVAD=1
-    do.call(rbind.data.frame,apply(bnp_spl[201:400,],1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full)))],
-                  comb=rep(c(row,1,row),2),
-                  cov=mortality_model_full_VCOV)}))
-    )) %>%
-  mutate(bnp=exp(bnp_trans)-1)
-ggplot(bnp_rr %>% mutate(durable_lvad=factor(durable_lvad)),
-       aes(x=bnp_trans,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
-  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-  geom_line(color="black",linewidth=.75) +
-  geom_hline(yintercept=1,linetype=2) +
-  scale_y_continuous(trans='log2',minor_breaks=NULL,
-                     # breaks=c(.25,.5,1,2,4,8),
-                     #limits=c(.3,200),
-                     oob = scales::rescale_none) +
-  facet_grid(~bnp_nt_pro,scales="free_x") +
-  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
-  labs(x="BNP",y="Adjusted hazard ratio (95% CI)",
-       linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-  theme_bw() +
-  theme(text=element_text(size=14))
-
-# plot them all together
-ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)"),
-                 egfr_rr %>% mutate(value=egfr,lab="eGFR"),
-                 bnp_rr %>% mutate(value=bnp_trans,lab=case_when(
-                   bnp_nt_pro==0 ~ "ln(BNP)",T ~ "ln(BNP NT Pro)")),
-                 alb_rr %>% mutate(value=albumin,lab="Albumin"),
-                 sod_rr %>% mutate(value=sodium,lab="Sodium")) %>%
-         mutate(durable_lvad=factor(durable_lvad,levels=c(0,1),labels=c("No","Yes"))),
-       aes(x=value,y=hr,linetype=durable_lvad,fill=durable_lvad)) +
-  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-  geom_line(color="black",linewidth=.75) +
-  geom_hline(yintercept=1,linetype=2) +
-  scale_y_continuous(trans='log2',minor_breaks=NULL,
-                     breaks=2^((-3):6),limits=c(.125/2,32),
-                     oob = scales::rescale_none) +
-  facet_wrap(~lab,scales="free_x",nrow=2) +
-  scale_fill_viridis_d() +
-  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
-  labs(x="Lab value",y="Adjusted hazard ratio (95% CI)",
-       linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-  theme_bw() +
-  theme(text=element_text(size=14))
-ggsave("lab-coefs-by-lvad-NEW.png",width=7.5,height=5,dpi=300)
-
-
-
-
+# # Map the 6-week probability to the status system
+# mortality_model_status = glm(
+#   outcome ~ status_at_start,
+#   data = combined_df,
+#   weights = weight, # in the absence of transplant
+#   family = binomial)
+# haz_dth_status = predict(mortality_model_status,newdata=data.frame(status_at_start=factor(1:6,levels=levels(combined_df$status_at_start))),type="response")
+# prob_surv_6wk_status = (1-haz_dth_status)^6
+# prob_surv_6wk_status
+# 
+# # how many LVAD years do you need to move from status 4 to status 3?
+# 
+# # set values for predicting
+# new_data_lvad <- data.frame(
+#   albumin_at_start = mean(pred_data$albumin_at_start[pred_data$durable_LVAD_at_start==1]),
+#   bilirubin_at_start = mean(pred_data$bilirubin_at_start[pred_data$durable_LVAD_at_start==1]),
+#   eGFR_at_start = mean(pred_data$eGFR_at_start[pred_data$durable_LVAD_at_start==1]),
+#   BNP_at_start = mean(pred_data$BNP_at_start[pred_data$durable_LVAD_at_start==1 & 
+#                                                pred_data$BNP_NT_Pro_at_start=="0"]),
+#   BNP_NT_Pro_at_start = "0",
+#   sodium_at_start = mean(pred_data$sodium_at_start[pred_data$durable_LVAD_at_start==1]),
+#   durable_LVAD_at_start = 1,
+#   short_mcs_ever_at_start = 0,
+#   cpo_at_start = mean(pred_data$cpo_at_start[pred_data$durable_LVAD_at_start==1]),
+#   api_at_start = mean(pred_data$api_at_start[pred_data$durable_LVAD_at_start==1]),
+#   papi_at_start = mean(pred_data$papi_at_start[pred_data$durable_LVAD_at_start==1]),
+#   lvad_years_at_start = seq(0,10,.2),
+#   impella_at_start=0,iabp_at_start=0
+# )
+# head(new_data_lvad)
+# pred_lvad <- pred_data_fun(new_data_lvad)
+# 
+# # make plot
+# ## add distribution of years on LVAD
+# ## add lines for Status 3 and 4
+# ggplot(pred_lvad, aes(x = lvad_years_at_start, y = prob_surv_6wk)) +
+#   geom_line(size = 1) +
+#   labs(
+#     #title = "Effect of LVAD years on 6-week survival probability in durable LVAD patients",
+#     x = "Years with LVAD",
+#     y = "6-Week Survival Probability"#survival without transplant"
+#   ) +
+#   theme_bw() + 
+#   coord_cartesian(xlim=c(0,10),
+#                   ylim=c(.97,1)) +
+#   scale_x_continuous(breaks=seq(0,10,1)) +
+#   geom_hline(yintercept=prob_surv_6wk_status["3"]) +
+#   geom_text(aes(4,prob_surv_6wk_status["3"],label="Status 3",vjust=-1)) +
+#   geom_hline(yintercept=prob_surv_6wk_status["4"]) +
+#   geom_text(aes(4,prob_surv_6wk_status["4"],label="Status 4",vjust=-1))
+# ggsave("pred-by-LVADtime-NEW.png",width=6,height=4)
+# 
+# # distribution of time on LVAD in training data, including all landmarks
+# summary(pred_data$lvad_years_at_start[pred_data$durable_LVAD_at_start==1])
 ```
 
 
-## Summarize hemodynamic effects
+<!-- ## Summarize spline effects by LVAD vs not -->
 ```{r}
-
-## api
-api_range = with(pred_data,seq(min(api_at_start),max(api_at_start),length.out=200))
-api_spl = ns(api_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"Boundary.knots"))
-api_rr = cbind.data.frame(
-  api = api_range,
-  do.call(rbind.data.frame,apply(api_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("api",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})))
-
-## papi
-papi_range = with(pred_data,seq(min(papi_at_start),quantile(papi_at_start,.95),length.out=200))
-papi_spl = ns(papi_range,df=3,
-              knots=attr(mortality_model_full$model$`ns(papi_at_start, df = 3)`,"knots"),
-              Boundary.knots=attr(mortality_model_full$model$`ns(papi_at_start, df = 3)`,"Boundary.knots"))
-papi_rr = cbind.data.frame(
-  papi = papi_range,
-  do.call(rbind.data.frame,apply(papi_spl,1,function(row) {
-                getHR(mortality_model_full,
-                  vars=names(coef(mortality_model_full))[grepl("papi",names(coef(mortality_model_full)))][1:3],
-                  comb=row,
-                  cov=mortality_model_full_VCOV)})))
-
-## cpo
-# cpo_range = with(pred_data,seq(min(cpo_at_start),quantile(cpo_at_start,.99),length.out=200))
-# cpo_spl = ns(cpo_range,df=3,
-#               knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"knots"),
-#               Boundary.knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"Boundary.knots"))
-# cpo_rr = cbind.data.frame(
-#   cpo = cpo_range,
-#   do.call(rbind.data.frame,apply(cpo_spl,1,function(row) {
+# ## LVAD interactions with: bilirubin, BNP, eGFR
+# 
+# ## bilirubin
+# bili_range = with(pred_data,seq(min(log(bilirubin_at_start+1)),max(log(bilirubin_at_start+1)),length.out=200))
+# bili_spl = ns(bili_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"Boundary.knots"))
+# bili_rr = cbind.data.frame(
+#   bilirubin_trans = rep(bili_range,2),
+#   durable_lvad = c(rep(0,length(bili_range)),rep(1,length(bili_range))),
+#   rbind.data.frame(
+#     do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
 #                 getHR(mortality_model_full,
-#                   vars=names(coef(mortality_model_full))[grepl("cpo",names(coef(mortality_model_full)))][1:3],
+#                   vars=names(coef(mortality_model_full))[grepl("bili",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("bili",names(coef(mortality_model_full)))],
+#                   comb=rep(row,2),
+#                   cov=mortality_model_full_VCOV)})))) %>%
+#   mutate(bilirubin=exp(bilirubin_trans)-1)
+# # ggplot(bili_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+# #        aes(x=exp(bilirubin_trans)-1,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+# #   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+# #   geom_line(color="black",linewidth=.75) +
+# #   geom_hline(yintercept=1,linetype=2) +
+# #   scale_y_continuous(trans='log2',minor_breaks=NULL,
+# #                      breaks=c(.25,.5,1,2,4,8),limits=c(.25,8),
+# #                      oob = scales::rescale_none) +
+# #   scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+# #   labs(x="Bilirubin",y="Adjusted hazard ratio (95% CI)",
+# #        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+# #   theme_bw() +
+# #   theme(text=element_text(size=14))
+# 
+# ## eGFR
+# egfr_range = with(pred_data,seq(min(eGFR_at_start),max(eGFR_at_start),length.out=200))
+# egfr_spl = ns(egfr_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(eGFR_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(eGFR_at_start, df = 3)`,"Boundary.knots"))
+# egfr_rr = cbind.data.frame(
+#   egfr = rep(egfr_range,2),
+#   durable_lvad = c(rep(0,length(egfr_range)),rep(1,length(egfr_range))),
+#   rbind.data.frame(
+#     do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("eGFR",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("eGFR",names(coef(mortality_model_full)))],
+#                   comb=rep(row,2),
+#                   cov=mortality_model_full_VCOV)}))))
+# # ggplot(egfr_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+# #        aes(x=egfr,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+# #   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+# #   geom_line(color="black",linewidth=.75) +
+# #   geom_hline(yintercept=1,linetype=2) +
+# #   scale_y_continuous(trans='log2',minor_breaks=NULL,
+# #                      breaks=c(.25,.5,1,2,4,8),limits=c(.25,8),
+# #                      oob = scales::rescale_none) +
+# #   scale_x_continuous(breaks=seq(0,120,20),limits=c(0,120),oob = scales::rescale_none) +
+# #   labs(x="eGFR",y="Adjusted hazard ratio (95% CI)",
+# #        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+# #   theme_bw() +
+# #   theme(text=element_text(size=14))
+# 
+# # sodium
+# sod_range = with(pred_data,seq(min(sodium_at_start),max(sodium_at_start),length.out=200))
+# sod_spl = ns(sod_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(sodium_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(sodium_at_start, df = 3)`,"Boundary.knots"))
+# sod_rr = cbind.data.frame(
+#   sodium = rep(sod_range,2),
+#   durable_lvad = c(rep(0,length(sod_range)),rep(1,length(sod_range))),
+#   rbind.data.frame(
+#     do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("sodium",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("sodium",names(coef(mortality_model_full)))],
+#                   comb=row,#rep(row,2),
+#                   cov=mortality_model_full_VCOV)}))))
+# # ggplot(sod_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+# #        aes(x=sodium,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+# #   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+# #   geom_line(color="black",linewidth=.75) +
+# #   geom_hline(yintercept=1,linetype=2) +
+# #   # scale_y_continuous(trans='log2',minor_breaks=NULL,
+# #   #                    breaks=2^(-8:1),limits=c(.0005,2),
+# #   #                    oob = scales::rescale_none) +
+# #   # scale_x_continuous(breaks=seq(100,200,20),limits=c(100,200),oob = scales::rescale_none) +
+# #   labs(x="Sodium",y="Adjusted hazard ratio (95% CI)",
+# #        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+# #   theme_bw() +
+# #   theme(text=element_text(size=14))
+# 
+# ## albumin
+# alb_range = with(pred_data,seq(min(albumin_at_start),max(albumin_at_start),length.out=200))
+# alb_spl = ns(alb_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(albumin_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(albumin_at_start, df = 3)`,"Boundary.knots"))
+# alb_rr = cbind.data.frame(
+#   albumin = rep(alb_range,2),
+#   durable_lvad = c(rep(0,length(alb_range)),rep(1,length(alb_range))),
+#   rbind.data.frame(
+#     do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("albumin",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("albumin",names(coef(mortality_model_full)))],
+#                   comb=row,#rep(row,2),
+#                   cov=mortality_model_full_VCOV)}))))
+# # ggplot(alb_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+# #        aes(x=albumin,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+# #   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+# #   geom_line(color="black",linewidth=.75) +
+# #   geom_hline(yintercept=1,linetype=2) +
+# #   scale_y_continuous(trans='log2',minor_breaks=NULL,
+# #                      breaks=c(.125/2,.125,.25,.5,1,2),limits=c(.01,2),
+# #                      oob = scales::rescale_none) +
+# #   # scale_x_continuous(breaks=seq(100,200,20),limits=c(100,200),oob = scales::rescale_none) +
+# #   labs(x="Albumin",y="Adjusted hazard ratio (95% CI)",
+# #        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+# #   theme_bw() +
+# #   theme(text=element_text(size=14))
+# 
+# # BNP
+# bnp_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==0),
+#                   seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
+# bnp_nt_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==1),
+#                   seq(min(log(BNP_at_start+1)),max(log(BNP_at_start+1)),length.out=200))
+# bnp_spl = ns(c(bnp_range,bnp_nt_range),df=3,
+#               knots=attr(mortality_model_full$model$`ns(log(BNP_at_start + 1), df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(log(BNP_at_start + 1), df = 3)`,"Boundary.knots"))
+# bnp_rr = cbind.data.frame(
+#   bnp_trans = rep(c(bnp_range,bnp_nt_range),2),
+#   bnp_nt_pro = rep(c(rep(0,length(bnp_range)),rep(1,length(bnp_nt_range))),2),
+#   durable_lvad = c(rep(0,length(c(bnp_range,bnp_nt_range))),rep(1,length(c(bnp_range,bnp_nt_range)))),
+#   rbind.data.frame(
+#     # BNP_NT_Pro=0, LVAD=0
+#     do.call(rbind.data.frame,apply(bnp_spl[1:200,],1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full))) & !grepl("BNP_NT",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})),
+#     # BNP_NT_Pro=1, LVAD=0
+#     do.call(rbind.data.frame,apply(bnp_spl[201:400,],1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full)))][1:7],
+#                   comb=c(row,1,row),
+#                   cov=mortality_model_full_VCOV)})),
+#     # BNP_NT_Pro=0, LVAD=1
+#     do.call(rbind.data.frame,apply(bnp_spl[1:200,],1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full))) & !grepl("BNP_NT",names(coef(mortality_model_full)))],
+#                   comb=rep(row,2),
+#                   cov=mortality_model_full_VCOV)})),
+#     # BNP_NT_Pro=1, LVAD=1
+#     do.call(rbind.data.frame,apply(bnp_spl[201:400,],1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("BNP",names(coef(mortality_model_full)))],
+#                   comb=rep(c(row,1,row),2),
+#                   cov=mortality_model_full_VCOV)}))
+#     )) %>%
+#   mutate(bnp=exp(bnp_trans)-1)
+# ggplot(bnp_rr %>% mutate(durable_lvad=factor(durable_lvad)),
+#        aes(x=bnp_trans,y=hr,linetype=durable_lvad,color=durable_lvad,fill=durable_lvad)) +
+#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+#   geom_line(color="black",linewidth=.75) +
+#   geom_hline(yintercept=1,linetype=2) +
+#   scale_y_continuous(trans='log2',minor_breaks=NULL,
+#                      # breaks=c(.25,.5,1,2,4,8),
+#                      #limits=c(.3,200),
+#                      oob = scales::rescale_none) +
+#   facet_grid(~bnp_nt_pro,scales="free_x") +
+#   # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+#   labs(x="BNP",y="Adjusted hazard ratio (95% CI)",
+#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+#   theme_bw() +
+#   theme(text=element_text(size=14))
+# 
+# # plot them all together
+# ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)"),
+#                  egfr_rr %>% mutate(value=egfr,lab="eGFR"),
+#                  bnp_rr %>% mutate(value=bnp_trans,lab=case_when(
+#                    bnp_nt_pro==0 ~ "ln(BNP)",T ~ "ln(BNP NT Pro)")),
+#                  alb_rr %>% mutate(value=albumin,lab="Albumin"),
+#                  sod_rr %>% mutate(value=sodium,lab="Sodium")) %>%
+#          mutate(durable_lvad=factor(durable_lvad,levels=c(0,1),labels=c("No","Yes"))),
+#        aes(x=value,y=hr,linetype=durable_lvad,fill=durable_lvad)) +
+#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+#   geom_line(color="black",linewidth=.75) +
+#   geom_hline(yintercept=1,linetype=2) +
+#   scale_y_continuous(trans='log2',minor_breaks=NULL,
+#                      breaks=2^((-3):6),limits=c(.125/2,32),
+#                      oob = scales::rescale_none) +
+#   facet_wrap(~lab,scales="free_x",nrow=2) +
+#   scale_fill_viridis_d() +
+#   # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+#   labs(x="Lab value",y="Adjusted hazard ratio (95% CI)",
+#        linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+#   theme_bw() +
+#   theme(text=element_text(size=14))
+# ggsave("lab-coefs-by-lvad-NEW.png",width=7.5,height=5,dpi=300)
+# 
+# 
+# 
+# 
+# ```
+# 
+# 
+# ## Summarize hemodynamic effects
+# ```{r}
+# 
+# ## api
+# api_range = with(pred_data,seq(min(api_at_start),max(api_at_start),length.out=200))
+# api_spl = ns(api_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(api_at_start, df = 3)`,"Boundary.knots"))
+# api_rr = cbind.data.frame(
+#   api = api_range,
+#   do.call(rbind.data.frame,apply(api_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("api",names(coef(mortality_model_full)))][1:3],
 #                   comb=row,
 #                   cov=mortality_model_full_VCOV)})))
-
-# make the plot
-ggplot(bind_rows(api_rr %>% rename(value=api) %>% mutate(hemo="API"),
-                 papi_rr %>% rename(value=papi) %>% mutate(hemo="PAPi")) %>%
-         mutate(hemo=factor(hemo,levels=c("API","PAPi"))),
-       aes(x=value,y=hr)) +
-  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
-  geom_line(color="black",linewidth=.75) +
-  geom_hline(yintercept=1,linetype=2) +
-  scale_y_continuous(trans='log2',minor_breaks=NULL,
-                     breaks=c(.25,.5,1,1.5,2,4,8),
-                     limits=c(.25,2),
-                     oob = scales::rescale_none) +
-  facet_grid(~hemo,scales="free") +
-  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
-  labs(x="Pulsatility index value",y="Adjusted hazard ratio (95% CI)") +
-       # linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
-  theme_bw() +
-  theme(text=element_text(size=14))
-ggsave("hemo-coefs-NEW.png",width=6,height=4)
+# 
+# ## papi
+# papi_range = with(pred_data,seq(min(papi_at_start),quantile(papi_at_start,.95),length.out=200))
+# papi_spl = ns(papi_range,df=3,
+#               knots=attr(mortality_model_full$model$`ns(papi_at_start, df = 3)`,"knots"),
+#               Boundary.knots=attr(mortality_model_full$model$`ns(papi_at_start, df = 3)`,"Boundary.knots"))
+# papi_rr = cbind.data.frame(
+#   papi = papi_range,
+#   do.call(rbind.data.frame,apply(papi_spl,1,function(row) {
+#                 getHR(mortality_model_full,
+#                   vars=names(coef(mortality_model_full))[grepl("papi",names(coef(mortality_model_full)))][1:3],
+#                   comb=row,
+#                   cov=mortality_model_full_VCOV)})))
+# 
+# ## cpo
+# # cpo_range = with(pred_data,seq(min(cpo_at_start),quantile(cpo_at_start,.99),length.out=200))
+# # cpo_spl = ns(cpo_range,df=3,
+# #               knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"knots"),
+# #               Boundary.knots=attr(mortality_model_full$model$`ns(cpo_at_start, df = 3)`,"Boundary.knots"))
+# # cpo_rr = cbind.data.frame(
+# #   cpo = cpo_range,
+# #   do.call(rbind.data.frame,apply(cpo_spl,1,function(row) {
+# #                 getHR(mortality_model_full,
+# #                   vars=names(coef(mortality_model_full))[grepl("cpo",names(coef(mortality_model_full)))][1:3],
+# #                   comb=row,
+# #                   cov=mortality_model_full_VCOV)})))
+# 
+# # make the plot
+# ggplot(bind_rows(api_rr %>% rename(value=api) %>% mutate(hemo="API"),
+#                  papi_rr %>% rename(value=papi) %>% mutate(hemo="PAPi")) %>%
+#          mutate(hemo=factor(hemo,levels=c("API","PAPi"))),
+#        aes(x=value,y=hr)) +
+#   geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+#   geom_line(color="black",linewidth=.75) +
+#   geom_hline(yintercept=1,linetype=2) +
+#   scale_y_continuous(trans='log2',minor_breaks=NULL,
+#                      breaks=c(.25,.5,1,1.5,2,4,8),
+#                      limits=c(.25,2),
+#                      oob = scales::rescale_none) +
+#   facet_grid(~hemo,scales="free") +
+#   # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+#   labs(x="Pulsatility index value",y="Adjusted hazard ratio (95% CI)") +
+#        # linetype="Durable LVAD",color="Durable LVAD",fill="Durable LVAD") +
+#   theme_bw() +
+#   theme(text=element_text(size=14))
+# ggsave("hemo-coefs-NEW.png",width=6,height=4)
 ```
 
 
