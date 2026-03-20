@@ -2243,59 +2243,86 @@ ggsave("pred-by-status-modelC.png",width=6,height=4)
 # ggsave("hemo-coefs-NEW.png",width=6,height=4)
 ```
 
+## Plot US-CRS score by status and device
+```{r}
+load("mrdat.Rdata") # from match-run-data.R
 
-## Forest plot
+for(mod in c("modC", "modE")) {
+  log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
+  
+  # Exponentiate to get hazard
+  haz <- exp(log_haz_col)
+  
+  # Cap at 99th percentile
+  haz_99 <- quantile(haz, 0.99)
+  haz_capped <- pmin(haz, haz_99)
+  
+  # Convert to log odds
+  log_odds <- log(haz_capped / (1 - haz_capped))
+  
+  # Scale to 1-50
+  mrdat[[paste0("risk_score_", mod)]] <- round(
+    1 + 49 * (log_odds - min(log_odds)) / (max(log_odds) - min(log_odds))
+  )
+  
+  cat(sprintf("\n=== RISK SCORE SUMMARY: %s ===\n", mod))
+  print(summary(mrdat[[paste0("risk_score_", mod)]]))
+}
+```
+
+
+<!-- ## Forest plot -->
 ```{r,eval=F}
-# Extract coefficients and confidence intervals
-coef1 <- summary(mortality_model_no_weights)$coefficients
-coef2 <- summary(uscrs_model)$coefficients
-
-
-# Create data frames with the coefficients and confidence intervals
-df1 <- data.frame(
-  term = rownames(coef1),
-  estimate = coef1[, "Estimate"],
-  conf.low = coef1[, "Estimate"] - 1.96 * coef1[, "Std. Error"],
-  conf.high = coef1[, "Estimate"] + 1.96 * coef1[, "Std. Error"],
-  model = "Model without Weights"
-)
-
-# Same terms as US-CRS + hemodynamics
-df2 <- data.frame(
-  term = setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start")),
-  estimate = coef2[, "Estimate"],
-  conf.low = coef2[, "Estimate"] - 1.96 * coef2[, "Std. Error"],
-  conf.high = coef2[, "Estimate"] + 1.96 * coef2[, "Std. Error"],
-  model = "USCRS 1.0"
-)
-
-df1 <- df1[df1$term != "(Intercept)", ]
-df2 <- df2[df2$term != "(Intercept)", ]
-
-# Combine the two data frames
-forest_df <- rbind(df1, df2)
-
-coef2
-df2
-forest_df
-class(df_intervals$BNP_NT_Pro)
-setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start"))
-
-# Rename and reorder variables
-new_names <- c("sodium_at_start" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start" = "PAPI", "log(BNP_at_start + 1):BNP_NT_Pro_at_start0" = "Log BNP, Regular BNP", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP, NT-proBNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start" = "CPO", "api_at_start" = "API", "albumin_at_start" = "Albumin" )
-term_order <- c("PAPI", "API", "CPO", "Durable LVAD", "Sodium", "Albumin", "Log BNP, NT-proBNP", "Log BNP, Regular BNP", "eGFR", "Log Bilirubin", "Short-term MCS")
-forest_df
-
-forest_df <- forest_df %>%
-  mutate(term = recode(term, !!!new_names))
-forest_df <- forest_df %>%
-  mutate(term = factor(term, levels = term_order))# Create the forest plot
-ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2, position = position_dodge(width = 0.5)) +
-  labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
-  theme_minimal()
-
-new_names
+# # Extract coefficients and confidence intervals
+# coef1 <- summary(mortality_model_no_weights)$coefficients
+# coef2 <- summary(uscrs_model)$coefficients
+# 
+# 
+# # Create data frames with the coefficients and confidence intervals
+# df1 <- data.frame(
+#   term = rownames(coef1),
+#   estimate = coef1[, "Estimate"],
+#   conf.low = coef1[, "Estimate"] - 1.96 * coef1[, "Std. Error"],
+#   conf.high = coef1[, "Estimate"] + 1.96 * coef1[, "Std. Error"],
+#   model = "Model without Weights"
+# )
+# 
+# # Same terms as US-CRS + hemodynamics
+# df2 <- data.frame(
+#   term = setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start")),
+#   estimate = coef2[, "Estimate"],
+#   conf.low = coef2[, "Estimate"] - 1.96 * coef2[, "Std. Error"],
+#   conf.high = coef2[, "Estimate"] + 1.96 * coef2[, "Std. Error"],
+#   model = "USCRS 1.0"
+# )
+# 
+# df1 <- df1[df1$term != "(Intercept)", ]
+# df2 <- df2[df2$term != "(Intercept)", ]
+# 
+# # Combine the two data frames
+# forest_df <- rbind(df1, df2)
+# 
+# coef2
+# df2
+# forest_df
+# class(df_intervals$BNP_NT_Pro)
+# setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start"))
+# 
+# # Rename and reorder variables
+# new_names <- c("sodium_at_start" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start" = "PAPI", "log(BNP_at_start + 1):BNP_NT_Pro_at_start0" = "Log BNP, Regular BNP", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP, NT-proBNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start" = "CPO", "api_at_start" = "API", "albumin_at_start" = "Albumin" )
+# term_order <- c("PAPI", "API", "CPO", "Durable LVAD", "Sodium", "Albumin", "Log BNP, NT-proBNP", "Log BNP, Regular BNP", "eGFR", "Log Bilirubin", "Short-term MCS")
+# forest_df
+# 
+# forest_df <- forest_df %>%
+#   mutate(term = recode(term, !!!new_names))
+# forest_df <- forest_df %>%
+#   mutate(term = factor(term, levels = term_order))# Create the forest plot
+# ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
+#   geom_point(position = position_dodge(width = 0.5)) +
+#   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2, position = position_dodge(width = 0.5)) +
+#   labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
+#   theme_minimal()
+# 
+# new_names
 ```
 
