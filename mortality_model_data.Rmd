@@ -2280,61 +2280,49 @@ pred_data = pred_data %>%
          log_odds = log(haz_dth_nowk / (1 - haz_dth_nowk)),
          uscrs2 = 1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds))
 summary(pred_data$uscrs2) # 1-50
-```
 
+# calculate max device support
+pred_data %>% count(short_MCS_ever,impella,iabp,durable_LVAD)
+pred_data = pred_data %>%
+  mutate(max_device = case_when(
+    short_MCS_ever == 1 ~ "Short-term MCS",
+    impella == 1 ~ "Impella",
+    iabp == 1 ~ "IABP",
+    durable_LVAD == 1 ~ "LVAD",
+    T ~ "Other"
+  ),
+  max_device = factor(max_device,levels=c("Short-term MCS","Impella","IABP","LVAD","Other")))
 
-<!-- ## Forest plot -->
-```{r,eval=F}
-# # Extract coefficients and confidence intervals
-# coef1 <- summary(mortality_model_no_weights)$coefficients
-# coef2 <- summary(uscrs_model)$coefficients
-# 
-# 
-# # Create data frames with the coefficients and confidence intervals
-# df1 <- data.frame(
-#   term = rownames(coef1),
-#   estimate = coef1[, "Estimate"],
-#   conf.low = coef1[, "Estimate"] - 1.96 * coef1[, "Std. Error"],
-#   conf.high = coef1[, "Estimate"] + 1.96 * coef1[, "Std. Error"],
-#   model = "Model without Weights"
-# )
-# 
-# # Same terms as US-CRS + hemodynamics
-# df2 <- data.frame(
-#   term = setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start")),
-#   estimate = coef2[, "Estimate"],
-#   conf.low = coef2[, "Estimate"] - 1.96 * coef2[, "Std. Error"],
-#   conf.high = coef2[, "Estimate"] + 1.96 * coef2[, "Std. Error"],
-#   model = "USCRS 1.0"
-# )
-# 
-# df1 <- df1[df1$term != "(Intercept)", ]
-# df2 <- df2[df2$term != "(Intercept)", ]
-# 
-# # Combine the two data frames
-# forest_df <- rbind(df1, df2)
-# 
-# coef2
-# df2
-# forest_df
-# class(df_intervals$BNP_NT_Pro)
-# setdiff(rownames(coef1), c("papi_at_start", "cpo_at_start", "api_at_start"))
-# 
-# # Rename and reorder variables
-# new_names <- c("sodium_at_start" = "Sodium", "short_mcs_ever_at_start" = "Short-term MCS", "papi_at_start" = "PAPI", "log(BNP_at_start + 1):BNP_NT_Pro_at_start0" = "Log BNP, Regular BNP", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP, NT-proBNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "cpo_at_start" = "CPO", "api_at_start" = "API", "albumin_at_start" = "Albumin" )
-# term_order <- c("PAPI", "API", "CPO", "Durable LVAD", "Sodium", "Albumin", "Log BNP, NT-proBNP", "Log BNP, Regular BNP", "eGFR", "Log Bilirubin", "Short-term MCS")
-# forest_df
-# 
-# forest_df <- forest_df %>%
-#   mutate(term = recode(term, !!!new_names))
-# forest_df <- forest_df %>%
-#   mutate(term = factor(term, levels = term_order))# Create the forest plot
-# ggplot(forest_df, aes(x = estimate, y = term, color = model)) +
-#   geom_point(position = position_dodge(width = 0.5)) +
-#   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2, position = position_dodge(width = 0.5)) +
-#   labs(x = "Coefficient Estimate", y = "Term", title = "Model Coefficients") +
-#   theme_minimal()
-# 
-# new_names
+# make figure: histogram of uscrs2 by status; fill by max_device
+pred_data1 = pred_data %>% 
+  filter(!is.na(status),status!="inactive") %>%
+  arrange(PX_ID,current_date) %>%
+  group_by(PX_ID) %>% slice_sample(n=1) %>% ungroup
+ggplot(pred_data1 %>% 
+         mutate(status=paste("Status",status),
+                status=factor(status,labels=c(
+                  paste0("Status ",1:6," (N=",
+                         unname(table(pred_data1$status))[1:6],")")))
+                ),
+       aes(uscrs2,fill=max_device)) +
+  geom_histogram(bins=25,position="stack") + 
+  facet_wrap(~ status) + #,scales="free_y") +
+  scale_fill_viridis_d() + theme_bw() +
+  scale_x_continuous(minor_breaks=F) + scale_y_continuous(minor_breaks=F) +
+  labs(fill="Device",x="USCRS 2.0 score",y="Number of candidates")
+ggplot(pred_data1 %>% 
+         mutate(status=paste("Status",status),
+                status=factor(status,labels=c(
+                  paste0("Status ",1:6," (N=",
+                         unname(table(pred_data1$status))[1:6],")"))),
+                Exception = ifelse(is.na(Exception),0,Exception)
+                ),
+       aes(uscrs2,fill=factor(Exception,labels=c("No","Yes")))) +
+  geom_histogram(bins=25,position="stack") + 
+  facet_wrap(~ status) + #,scales="free_y") +
+  scale_fill_viridis_d() +
+  theme_bw() +
+  scale_x_continuous(minor_breaks=F) + scale_y_continuous(minor_breaks=F) +
+  labs(fill="Exception",x="USCRS 2.0 score",y="Number of candidates")
 ```
 
