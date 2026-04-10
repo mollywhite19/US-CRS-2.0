@@ -2246,6 +2246,17 @@ ggsave("pred-by-status-modelC.png",width=6,height=4)
 ## Plot US-CRS score by status and device
 Pull the first row for each landmark in model training dataset, using Model C for prediction.
 ```{r}
+## if only running this section:
+this_section_only = F
+if (this_section_only) {
+  load("mortality_model_train_data.Rdata") # combined_df
+  pred_data = combined_df %>% filter(week_from_baseline==1)
+  load("mort-pred-fun.Rdata") # pred_data_fun
+  load("mortality-model-options.Rdata") # mortality_modelC
+  pred_data = pred_data_fun(pred_data,mortality_modelC)
+  gc()
+}
+
 load("mrdat.Rdata") # from match-run-data.R
 
 for(mod in c("modC")) { # , "modE"
@@ -2289,11 +2300,12 @@ pred_data = pred_data %>%
     impella == 1 ~ "Impella",
     iabp == 1 ~ "IABP",
     durable_LVAD == 1 ~ "LVAD",
-    T ~ "Other"
+    T ~ "None of the\nabove"
   ),
-  max_device = factor(max_device,levels=c("Short-term MCS","Impella","IABP","LVAD","Other")))
+  max_device = factor(max_device,levels=c("Short-term MCS","Impella","IABP","LVAD","None of the\nabove")))
 
 # make figure: histogram of uscrs2 by status; fill by max_device
+set.seed(1992)
 pred_data1 = pred_data %>% 
   filter(!is.na(status),status!="inactive") %>%
   arrange(PX_ID,current_date) %>%
