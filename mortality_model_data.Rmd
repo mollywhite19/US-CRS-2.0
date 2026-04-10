@@ -2321,7 +2321,9 @@ ggplot(pred_data1 %>%
   facet_wrap(~ status) + #,scales="free_y") +
   scale_fill_viridis_d() + theme_bw() +
   scale_x_continuous(minor_breaks=F) + scale_y_continuous(minor_breaks=F) +
-  labs(fill="Device",x="USCRS 2.0 score",y="Number of candidates")
+  labs(fill="Device",x="USCRS 2.0 score",y="Number of candidates") +
+  theme(text=element_text(size=12))
+ggsave("uscrs-by-status-device.png",width=7.5,height=5,dpi=300) # Figure 3
 ggplot(pred_data1 %>% 
          mutate(status=paste("Status",status),
                 status=factor(status,labels=c(
@@ -2335,6 +2337,8 @@ ggplot(pred_data1 %>%
   scale_fill_viridis_d() +
   theme_bw() +
   scale_x_continuous(minor_breaks=F) + scale_y_continuous(minor_breaks=F) +
-  labs(fill="Exception",x="USCRS 2.0 score",y="Number of candidates")
+  labs(fill="Exception",x="USCRS 2.0 score",y="Number of candidates") +
+  theme(text=element_text(size=12))
+ggsave("uscrs-by-status-exception.png",width=7.5,height=5,dpi=300) # Figure 3
 ```
 
