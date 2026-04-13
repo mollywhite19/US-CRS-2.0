@@ -630,6 +630,9 @@ label(static_table$status_label) = "Medical urgency status"
 table1(~ age_at_listing + CAN_GENDER + status_label + durable_LVAD + short_MCS_ever | train_test_split_label, 
        data=static_table, overall = F)
 
+## save static_table (for Table 1) and table_data (for supplement) - data before imputation
+save(static_table,table_data,file="table1data.Rdata")
+
 
 ## after imputation - could be for supplement
 table_data = df_final %>% 

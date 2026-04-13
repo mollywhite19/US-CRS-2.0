@@ -123,17 +123,21 @@ justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
              bind_rows(just_form_hr_stat2 %>% select(JustId,CriteriaIabpSupport),
                        just_form_hr_stat3 %>% select(JustId,CriteriaIabpSupport)),
              by="JustId") %>%
-  left_join(.,thor_support_device %>% select(DeviceId,DeviceTypeId,VadBrandId,TahBrandId,PercuBrandId,VentricularSupportId,ImplantDt),
+  left_join(.,thor_support_device %>% select(DeviceId,DeviceTypeId,VadBrandId,TahBrandId,PercuBrandId,VentricularSupportId,ImplantDt,OtherSpecify),
             by=c("ThorSupportDevicePrimary"="DeviceId")) %>%
   mutate(BrandId = coalesce(VadBrandId,TahBrandId,PercuBrandId)) %>%
   # EndDate is missing for people who were still at that status when data were pulled
   mutate(EndDate = case_when(is.na(EndDate) ~ max(EndDate,na.rm=T),T ~ EndDate))
 
+# look at Impellas in OtherSpecify
+thor_support_device %>% filter(grepl("imp",OtherSpecify,ignore.case=T)) %>% count(OtherSpecify) %>% print(n=100)
+
 # special dataset for iabp and impella
 # 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
 justdat_device = justdat %>%
   mutate(iabp = case_when(DeviceTypeId %in% 8 ~ 1,T ~ 0),
-         impella = case_when(BrandId %in% c(237,238,239,225,226) ~ 1,T ~ 0)) %>%
+         impella = case_when(BrandId %in% c(237,238,239,225,226) ~ 1,T ~ 0),
+         impella = case_when(grepl("imp",OtherSpecify,ignore.case=T) ~ 1,T ~ impella)) %>%
   arrange(px_id,BeginDate,EndDate) %>%
   group_by(px_id) %>%
   mutate(iabp_ever = ifelse(cumsum(iabp)>0,1,0),
@@ -305,6 +309,99 @@ rm(df_final1)
 # save data by week, including all weeks w/ no landmarks or rows after removal
 save(df_final,file="discrete_data_preSplit.Rdata")
 
+library(table1)
+
+# load pre-imputation data for Table 1 and supplemental Table 1
+base::load("table1data.Rdata") # table_data (supp; time-varying) and static_table (Table 1)
+
+# Want to include: Age, sex, diagnosis, status, short-term MCS, Impella, IABP, LVAD, eGFR, sodium, BNP, albumin, bilirubin, API, PAPI, CPO
+
+# calculate eGFR, API, PAPI, CPO with variables before imputation:
+static_table = static_table %>% ungroup() %>%
+   mutate(
+    eGFR = case_when(
+      CAN_GENDER == 'F' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.7), 1)^(-0.241)) *
+        (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing) * 1.012,
+      CAN_GENDER == 'M' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.9), 1)^(-0.302)) *
+        (pmax((creatinine / 0.9), 1)^(-1.2)) * 0.9938^(age_at_listing)),
+    cpo = (1/451) * cardiac_output * (((1/3)*systolicBP) + ((2/3)*diastolicBP)),
+    api = (systolicBP - diastolicBP) / PCWP,
+    papi = (PASP - PADP) / central_venous_pressure,
+    api = case_when(!is.na(PCWP) & PCWP == 0 ~ 1, T ~ api),
+    papi = case_when(
+      !is.na(central_venous_pressure) & central_venous_pressure == 0 ~ 1,
+      papi < 1 & !is.na(papi) ~ 1,
+      TRUE ~ papi),
+    # recode API as missing if <0
+    api = ifelse(api<0,NA,api)
+   )
+
+# join with df_final to get diagnosis, durable_LVAD, Impella, IABP
+nrow(static_table)
+static_table = left_join(static_table %>% select(-diagnosis,-durable_LVAD),df_final %>% select(PX_ID,current_date,diagnosis,durable_LVAD,lvad_years,impella,iabp),
+                         by=c("PX_ID","current_date"))
+with(static_table,table(impella,useNA="ifany"))
+with(static_table,table(iabp,useNA="ifany"))
+
+# rename diagnosis groups
+## Amyloid, dilated, hypertrophic, and restricted are types of cardiomyopathies
+static_table = static_table %>%
+  mutate(diag_label = case_when(
+    diagnosis %in% "Amyloid" ~ "Amyloid CM",
+    diagnosis %in% "Dilated_CM" ~ "Dilated CM",
+    diagnosis %in% "Hypertrophic" ~ "Hypertrophic CM",
+    diagnosis %in% "Restricted" ~ "Restricted CM",
+    diagnosis %in% "Re-Transplant" ~ "Retransplant",
+    T ~ diagnosis
+  ),
+  diag_label = factor(diag_label,levels=c("Amyloid CM","Congenital","Dilated CM","Hypertrophic CM","Ischemic","Retransplant","Restricted CM","Valvular","Other")))
+
+# make Table 1
+## Age, sex, diagnosis, status, short-term MCS, Impella, IABP, LVAD, eGFR, sodium, BNP, albumin, bilirubin, API, PAPI, CPO
+label(static_table$diag_label) = "Diagnosis"
+label(static_table$albumin) = "Albumin"
+units(static_table$albumin) = "g/dL"
+label(static_table$bilirubin) = "Bilirubin"
+units(static_table$bilirubin) = "mg/dL"
+label(static_table$sodium) = "Sodium"
+units(static_table$sodium) = "mEq/L"
+label(static_table$BNP) = "BNP"
+units(static_table$BNP) = "pg/mL"
+static_table$durable_LVAD = factor(static_table$durable_LVAD,labels=c("No","Yes"))
+label(static_table$durable_LVAD) = "Ever on durable LVAD"
+static_table$impella = factor(static_table$impella,labels=c("No","Yes"))
+label(static_table$impella) = "Current Impella"
+static_table$iabp = factor(static_table$iabp,labels=c("No","Yes"))
+label(static_table$iabp) = "Current IABP"
+label(static_table$lvad_years) = "Years on LVAD"
+label(static_table$api) = "Aortic pulsatility index"
+label(static_table$papi) = "Pulmonary artery pulsatility index"
+label(static_table$cpo) = "Cardiac power output"
+table1(~ age_at_listing + CAN_GENDER + diag_label + status_label + short_MCS_ever + impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + eGFR + BNP + sodium + api + papi + cpo | train_test_split_label, 
+       data=static_table, overall = F)
+
+## time-varying table ##
+
+# join with df_final to get diagnosis, durable_LVAD, Impella, IABP
+table_data = left_join(table_data %>% select(-durable_LVAD),df_final %>% select(PX_ID,current_date,durable_LVAD,impella,iabp),
+                         by=c("PX_ID","current_date"))
+
+# make table
+table_data$status_label = factor(table_data$status,
+                                   levels=c(1:6,"inactive"),
+                                   labels=c(paste("Status",1:6),"Inactive"))
+label(table_data$status_label) = "Medical urgency status"
+table_data$durable_LVAD = factor(table_data$durable_LVAD,labels=c("No","Yes"))
+label(table_data$durable_LVAD) = "Ever on durable LVAD"
+table_data$impella = factor(table_data$impella,labels=c("No","Yes"))
+label(table_data$impella) = "Current Impella"
+table_data$iabp = factor(table_data$iabp,labels=c("No","Yes"))
+label(table_data$iabp) = "Current IABP"
+table_data$short_MCS_ever = factor(table_data$short_MCS_ever,labels=c("No","Yes"))
+label(table_data$short_MCS_ever) = "Ever on short-term MCS"
+table_data$out_of_range_flag = factor(table_data$out_of_range_flag,labels=c("No","Yes"))
+label(table_data$out_of_range_flag) = "Any data out of range"
+table1(~ status_label + short_MCS_ever + impella + iabp + durable_LVAD + albumin + bilirubin + creatinine + BNP + sodium + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + out_of_range_flag | train_test_split_label, data=table_data,overall=F)
 
 ```
 
