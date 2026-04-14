@@ -286,7 +286,7 @@ eight_sets_test = eight_sets_test %>%
 Try out all of the potential models (models A-G) in validation data (`eight_sets_valid`). Try out Model C and Model E (with linear splines) in test data (`eights_sets_test`).
 ```{r}
 # load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
-load("mort-pred-fun.Rdata")
+base::load("mort-pred-fun.Rdata")
 
 # apply to eight_sets_valid
 eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
@@ -310,6 +310,7 @@ save(eight_sets_valid_modA,eight_sets_valid_modB,
 
 # apply to eight_sets_test
 eight_sets_test_modC = pred_data_fun(eight_sets_test,mortality_modelC)
+base::load("mortality-modelE-linear.Rdata")
 eight_sets_test_modE = pred_data_fun(eight_sets_test,mortality_modelE_linear,linear_spline=T)
 save(eight_sets_test_modC,eight_sets_test_modE,file="eight-sets-test.Rdata")
 ```
