@@ -16,15 +16,16 @@
 
 # bring in mortality models
 ## from mortality_model_data.Rmd
-load("mortality-model-options.Rdata")
+base::load("mortality-model-options.Rdata")
+base::load("mortality-modelE-linear.Rdata")
 
 # bring in discrete-time data before training/valid/test split
 ## from mortality_model_data.Rmd
-load("discrete_data_preSplit.Rdata") # df_final
+base::load("discrete_data_preSplit.Rdata") # df_final
 
 # # load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
 # ## from mortality_model_data.Rmd
-load("mort-pred-fun.Rdata")
+base::load("mort-pred-fun.Rdata")
 
 # reduce dataset to pre-Dec 2024
 summary(df_final$current_date)

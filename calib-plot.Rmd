@@ -493,8 +493,18 @@ calib_diag_long = calib_diag %>%
                             labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
                                      "Predicted\nUS-CRS 2.0 -\nComplex",
                                      "Observed")))
+calib_diag_long = calib_diag_long %>%
+  mutate(diag_label = case_when(
+    diag %in% "Amyloid" ~ "Amyloid",
+    diag %in% "Dilated_CM" ~ "Dilated",
+    diag %in% "Hypertrophic" ~ "Hypertrophic",
+    diag %in% "Restricted" ~ "Restricted",
+    diag %in% "Re-Transplant" ~ "Retransplant",
+    T ~ diag
+  ),
+  diag_label = factor(diag_label,levels=c("Amyloid","Congenital","Dilated","Hypertrophic","Ischemic","Retransplant","Restricted","Valvular","Other")))
 ggplot(calib_diag_long,
-       aes(x = factor(diag), 
+       aes(x = diag_label, 
            y = value, fill = type_fact)) +
   geom_col(position = position_dodge(width = 0.9), color = "black") +
   # geom_errorbar(

@@ -304,7 +304,7 @@ rm(df_final1)
 
 ```
 
-## Make new Table 1 - working
+## Make new Table 1
 ```{r}
 # save data by week, including all weeks w/ no landmarks or rows after removal
 save(df_final,file="discrete_data_preSplit.Rdata")
@@ -1740,7 +1740,7 @@ bnp_rr = cbind.data.frame(
                 getHR(mortality_modelE,
                   vars=names(coef(mortality_modelE))[grepl("BNP",names(coef(mortality_modelE)))][1:7],
                   # note: subtracting off the BNP_NT_Pro intercept; start at 0 at minimum BNP NT Pro
-                  comb=c(row,1,row)-c(bnp_spl[(length(bnp_range)+1),],1,bnp_spl[(length(bnp_range)+1)]),
+                  comb=c(row,1,row)-c(bnp_spl[(length(bnp_range)+1),],1,bnp_spl[(length(bnp_range)+1),]),
                   cov=mortality_modelE_VCOV)})))) %>%
   mutate(bnp=exp(bnp_trans)-1)
 
@@ -2393,15 +2393,15 @@ Pull the first row for each landmark in model training dataset, using Model C fo
 ## if only running this section:
 this_section_only = F
 if (this_section_only) {
-  load("mortality_model_train_data.Rdata") # combined_df
+  base::load("mortality_model_train_data.Rdata") # combined_df
   pred_data = combined_df %>% filter(week_from_baseline==1)
-  load("mort-pred-fun.Rdata") # pred_data_fun
-  load("mortality-model-options.Rdata") # mortality_modelC
+  base::load("mort-pred-fun.Rdata") # pred_data_fun
+  base::load("mortality-model-options.Rdata") # mortality_modelC
   pred_data = pred_data_fun(pred_data,mortality_modelC)
   gc()
 }
 
-load("mrdat.Rdata") # from match-run-data.R
+base::load("mrdat.Rdata") # from match-run-data.R
 
 for(mod in c("modC")) { # , "modE"
   log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
