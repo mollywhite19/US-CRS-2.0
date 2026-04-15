@@ -1,0 +1,521 @@
+---
+title: "Calibration plot"
+author: "Grace Lyden"
+date: "2025-06-11"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls())
+# base::load("mortality-model.RData")
+base::load("mortality_model_test_data.RData")
+base::load("eight-sets-valid.Rdata")
+base::load("eight-sets-test.Rdata")
+
+library(dplyr)
+library(haven)
+library(survival)
+library(ggplot2)
+library(splines)
+library(lubridate)
+library(tidyr)
+```
+
+For calibration, we can use time-varying weights by week, similar to the mortality model. First, we refit the IPW models for the probability of transplant in the test set, to account for the test-set censoring distribution. Then, we expand the validation/test set of calendar cross-sections (which are one row per PX_ID per cross-section) to include up to 6 rows for the 6 weeks follow-up, with time-varying weights per row.
+
+## Refit transplant models for IPW
+Fit the numerator and denominator models for the IPW in the test set. These are based on probabilities of receiving a transplant.
+```{r}
+## create probability for numerator of stabilized weights ##
+# we want Pr(transplant) given variables at start of 6-week window
+# for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of test_data
+
+# create 6-week windows of test_data
+test_data = test_data %>%
+  group_by(PX_ID) %>%
+  mutate(window=ceiling(row_number()/6),
+         week_from_baseline = (row_number() - 6*(window-1))) %>%
+  ungroup()
+# test_data %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
+test_data = test_data %>%
+  group_by(PX_ID,window) %>%
+  mutate(albumin_at_start = first(albumin),
+         bilirubin_at_start = first(bilirubin),
+         eGFR_at_start = first(eGFR),
+         sodium_at_start = first(sodium),
+         BNP_at_start = first(BNP),
+         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+         durable_LVAD_at_start = first(durable_LVAD),
+         short_mcs_ever_at_start = first(short_MCS_ever)) %>%
+  ungroup()
+
+# fit transplant model
+## just US-CRS variables bc anything in this numerator model has to be in the mortality model
+tx_model_first = glm(
+   transplant ~ 
+    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = test_data, family = binomial)
+
+# remove new variables from test_data
+test_data = test_data %>% select(-(window:short_mcs_ever_at_start))
+
+## create probability for denominator of stabilized weights ##
+# need prob_no_tx variable in test_data
+
+# fit chosen model
+tx_status_hemo_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + 
+     ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + 
+     status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), 
+   data = test_data, family = binomial)
+test_data$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=test_data, type = "response")
+
+# with chosen model, set probability of not receiving a transplant each week
+test_data = test_data %>%
+  mutate(prob_no_tx = 1 - fit_prob_hemo)
+```
+
+## Set up test data with rows after delisting, by week
+```{r test}
+## Create week variable
+test_data = test_data %>% 
+  group_by(PX_ID) %>%
+  mutate(
+    week = row_number()
+  ) %>% relocate(week, .after = CAN_LISTING_CTR_CD) %>% ungroup
+
+
+# Adjust delisting time variables to censor at 6 weeks
+# Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
+# If candidates dies more than 4/5 weeks after delisting, they are censored
+test_data = test_data %>% group_by(PX_ID) %>% 
+  
+  mutate(
+    # if we have full follow-up for the week, follow for censoring (floor)
+    time_until_censor_after_delisting = 
+      case_when(row_number() == n() & !is.na(time_until_censor_after_delisting) ~ 
+                  floor(pmax(0,removal_time + time_until_censor_after_delisting - interval_stop)/7)*7,
+                T ~ NA),
+    # follow for death even w/o full week (ceiling)
+    time_until_death_after_delisting = 
+      case_when(row_number() == n() & !is.na(time_until_death_after_delisting) ~ 
+                  ceiling(pmax(0,removal_time + time_until_death_after_delisting - interval_stop)/7)*7,
+                T ~ NA)) %>%
+  
+  fill(time_until_censor_after_delisting,time_until_death_after_delisting,.direction="downup") %>%
+  
+  ## Note: This is intentionally different from mortality_model_data - 5 weeks regardless of even/odd
+  # censor at 6 weeks
+  ungroup() %>%
+  mutate(time_until_censor_after_delisting = case_when(
+    time_until_censor_after_delisting > 35  |
+      time_until_death_after_delisting > 35 ~ 35,
+    TRUE ~ time_until_censor_after_delisting
+  ),
+  # recode time to death as missing if censored
+  time_until_death_after_delisting = ifelse(!is.na(time_until_censor_after_delisting),NA,
+                                            time_until_death_after_delisting),
+  outcome = ifelse(!is.na(time_until_censor_after_delisting),0,outcome)
+  
+  )
+
+## Determine delisting row and # of duplicates we need after delisting, until death or censoring
+test_data = test_data %>% group_by(PX_ID) %>% mutate(
+  delisting = case_when(
+    (!is.na(time_until_death_after_delisting) | !is.na(time_until_censor_after_delisting)) & row_number() == n() ~ 1,
+    TRUE ~ 0)
+) %>% ungroup() %>% mutate(
+  duplicates_after_delisting = case_when(
+    delisting == 1 & time_until_death_after_delisting > 0 ~
+      time_until_death_after_delisting/7,
+    delisting == 1 & time_until_censor_after_delisting > 0 ~ 
+      time_until_censor_after_delisting/7,
+    TRUE ~ 0))
+
+## repeat rows for the duplicates after delisting
+# and recode interval_start, interval_stop
+test_data = test_data %>%
+  slice(rep(row_number(), duplicates_after_delisting+1)) %>%
+  group_by(PX_ID) %>%
+  mutate(week=row_number()) %>%
+  group_by(PX_ID,duplicates_after_delisting) %>%
+  mutate(dup=row_number()-1) %>%
+  ungroup() %>%
+  mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
+         current_date = as.Date(can_listing_dt) + interval_start,
+         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop)) %>%
+  select(-dup)
+
+# code outcome for last row - now outcome is correct
+test_data = test_data %>%
+  group_by(PX_ID) %>%
+  mutate(outcome = case_when(
+    row_number()==n() & outcome==1 ~ 1,
+    row_number()==n() & !is.na(time_until_death_after_delisting) & is.na(time_until_censor_after_delisting) ~ 1,
+    T ~ 0))
+table(test_data$outcome)
+table(test_data$outcome,test_data$CAN_REM_CD)
+
+## Adjust prob_no_tx variable after delisting
+# set prob_no_tx to 1 after delisting
+test_data = test_data %>%
+  group_by(PX_ID) %>%
+  mutate(delisting2 = cumsum(delisting),
+         prob_no_tx = ifelse(delisting2>1,1,prob_no_tx)) %>%
+  ungroup
+table(test_data$transplant,test_data$delisting) # quick check
+```
+
+## Set up validation and test data for calibration analysis
+
+Join `test_data` to the eight calendar cross-sections and include 6 weeks of follow-up per PX_ID per cross-section. Calculate IPW.
+```{r join}
+# first, combine the eight_sets_valid datasets - save predicted probs from different models as variables
+## not saving int; just going to pool all 8 sets for calibration analysis
+eight_sets_valid = full_join(eight_sets_valid_modA %>% select(PX_ID,current_date,prob_outcome_6wk_modA=prob_outcome_6wk),
+                       eight_sets_valid_modB %>% select(PX_ID,current_date,prob_outcome_6wk_modB=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modC %>% select(PX_ID,current_date,prob_outcome_6wk_modC=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modD %>% select(PX_ID,current_date,prob_outcome_6wk_modD=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modE %>% select(PX_ID,current_date,prob_outcome_6wk_modE=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modF %>% select(PX_ID,current_date,prob_outcome_6wk_modF=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modG %>% select(PX_ID,current_date,prob_outcome_6wk_modG=prob_outcome_6wk)) %>%
+  full_join(.,eight_sets_valid_modH %>% select(PX_ID,current_date,prob_outcome_6wk_modH=prob_outcome_6wk))
+names(eight_sets_valid)
+
+# do the same for eight_sets_test
+eight_sets_test = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,prob_outcome_6wk_modC=prob_outcome_6wk),
+                       eight_sets_test_modE %>% select(PX_ID,current_date,prob_outcome_6wk_modE=prob_outcome_6wk))
+summary(eight_sets_test$prob_outcome_6wk_modC)
+summary(eight_sets_test$prob_outcome_6wk_modE)
+
+# confirm eight_sets and test_data are both unique by PX_ID and current_date
+nrow(eight_sets_valid);eight_sets_valid %>% distinct(PX_ID,current_date) %>% nrow
+nrow(test_data);test_data %>% distinct(PX_ID,current_date) %>% nrow
+nrow(eight_sets_test);eight_sets_test %>% distinct(PX_ID,current_date) %>% nrow
+
+# function to extend eight_sets to include 6 rows follow-up per PX_ID (per cross-section) and calculate IPW (sweight)
+## eight_sets input should be a very limited dataset with PX_ID, current_date, and variables not in test_data (predicted probabilities of 6-week survival)
+extend_6wk = function(eight_sets) {
+  # left join to test_data
+  joindat = left_join(test_data,
+                      eight_sets %>%
+                        mutate(include=T),
+                      by=c("PX_ID","current_date"))
+
+  # create 6 weeks of follow-up for each row included in eight_sets
+  joindat = joindat %>%
+    mutate(int_start = case_when(include ~ 1, T ~ 0)) %>%
+    group_by(PX_ID) %>%
+    mutate(
+      grp = cumsum(int_start)
+    ) %>%
+    group_by(PX_ID,grp) %>%
+    mutate(week_from_baseline = row_number()) %>%
+    ungroup() %>%
+    filter(week_from_baseline<=6,grp>0)
+  # joindat %>% select(PX_ID,grp,week_from_baseline,current_date,interval_start,interval_stop,outcome)
+  # table(joindat$include)
+  # nrow(eight_sets)
+  # summary(joindat$current_date[joindat$week_from_baseline==1])
+  # table(joindat$outcome)
+  # table(eight_sets$outcome)
+  
+  ## Calculate (unstabilized) weights
+  # Create weight variable based on prob_no_tx
+  joindat = joindat %>% group_by(PX_ID, grp) %>% mutate(
+    weight = 1/(cumprod(prob_no_tx))
+  ) %>% ungroup()
+  
+  # remove transplant weeks
+  joindat = joindat %>% filter(transplant == 0)
+  
+  ## look at weights
+  # with(joindat,tapply(weight,week_from_baseline,summary))
+  
+  ## calculate stabilized weights
+  
+  # get variables at start
+  joindat = joindat %>% 
+    group_by(PX_ID,grp) %>% 
+    mutate(albumin_at_start = first(albumin),
+           bilirubin_at_start = first(bilirubin),
+           eGFR_at_start = first(eGFR),
+           sodium_at_start = first(sodium),
+           BNP_at_start = first(BNP),
+           BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+           durable_LVAD_at_start = first(durable_LVAD),
+           short_mcs_ever_at_start = first(short_MCS_ever),
+           status_at_start=first(status),
+           excep_at_start=first(Exception),
+           diagnosis_at_start=first(diagnosis)) %>% 
+    ungroup %>%
+    mutate(excep_at_start=ifelse(is.na(excep_at_start),0,excep_at_start))
+  
+  # calculate numerator
+  joindat = joindat %>% mutate(
+    prob_no_tx_start = 1 - 
+      predict(tx_model_first, newdata = joindat, type = "response"),
+    prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start)) %>%
+    group_by(PX_ID, grp) %>% mutate(
+    sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+  ) %>% ungroup
+  # with(joindat,tapply(sweight,week_from_baseline,summary))
+  
+  # # truncate weights
+  # joindat = joindat %>% group_by(week_from_baseline) %>% mutate(
+  #   tweight = ifelse(sweight > quantile(sweight,probs=.98,na.rm=T), 
+  #                    quantile(sweight,probs=.98,na.rm=T), sweight),
+  #   tweight = ifelse(sweight < quantile(sweight,probs=.02,na.rm=T), 
+  #                    quantile(sweight,probs=.02,na.rm=T), tweight)) %>%
+  #   ungroup
+  # with(joindat,tapply(tweight,week_from_baseline,summary))
+  
+  return(joindat)
+}
+eight_sets_valid_long = extend_6wk(eight_sets_valid)
+nrow(eight_sets_valid);nrow(eight_sets_valid_long)
+eight_sets_test_long = extend_6wk(eight_sets_test)
+```
+
+## Calculate calibration statistic in validation data
+Average squared difference between observed 6-week mortality within status and average predicted 6-week mortality within status, across medical urgency statuses in validation data (9/1/23-8/31/24).
+
+```{r}
+makeCalibData = function(data,q=10,risk_score="prob_outcome_6wk") {
+  # group data into ntiles by expected risk
+  data1 = data %>% filter(week_from_baseline==1)
+  data1$risk_grp = ntile(data1[[risk_score]],n = q)
+  data = left_join(data,data1 %>% select(PX_ID,grp,risk_grp),by=c("PX_ID","grp"))
+  
+  # get average predicted risk in each ntile
+  df = data1 %>% group_by(risk_grp) %>% 
+    summarise(exp=mean(!!sym(risk_score)),
+              exp.25=quantile(!!sym(risk_score),.25),
+              exp.75=quantile(!!sym(risk_score),.75))
+  
+  # get observed risk in each ntile
+  obs_risks = lapply(1:q,function(i) {
+    ipw.surv = survfit(Surv(start,stop,outcome) ~ 1,
+                      data=data %>% filter(risk_grp==i) %>%
+                        mutate(start=week_from_baseline-1,
+                               stop=week_from_baseline,
+                               id=interaction(PX_ID,grp)),
+                      type='kaplan-meier', weights=sweight,
+                      cluster=id)
+    ipw.CI = summary(ipw.surv,times=6,extend=T)[c("surv","lower","upper")]
+    # convert to mortality
+    mort.CI = lapply(ipw.CI,function(surv) {1-surv})
+    return(mort.CI)
+  })
+  obs_df = do.call(rbind.data.frame,obs_risks) %>%
+    rename(obs=surv,upper=lower,lower=upper)
+  output_df = cbind.data.frame(df,obs_df)
+  return(output_df)
+}
+
+# function to calculate calibration statistic by status
+## joindat should be the extended dataset by week
+## risk_score is the name of the predicted 6-week mortality
+calibStatStatus = function(joindat,risk_score) {
+  # get overall observed and expected by status
+  calib_status = lapply(1:6,function(i) {
+    makeCalibData(joindat %>% filter(status_at_start==i),q=1,risk_score) %>%
+      mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
+  })
+  
+  # # get overall observed and expected by status and exception
+  # levels = joindat %>% count(status_at_start,excep_at_start)
+  # calib_status = lapply(1:nrow(levels),
+  #                       function(xx) {
+  #   i = levels$status_at_start[xx]
+  #   j = levels$excep_at_start[xx]
+  #   makeCalibData(joindat %>% filter(status_at_start==i,excep_at_start==j),q=1,risk_score) %>%
+  #     mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+  # })
+  calib_status = do.call(rbind.data.frame,calib_status)
+  # return(calib_status %>% mutate(sqdiff=(100*(obs-exp))^2,diff=100*(obs-exp)) %>% select(status,obs,exp,sqdiff,diff))
+  
+  # calculate average squared difference bw obs and exp across statuses
+  ## do this in percent (*100) for bigger numbers
+  return(with(calib_status,mean((100*(obs-exp))^2)))
+}
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modA")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modB")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modC")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modD")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modE")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modF")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modG")
+calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modH")
+
+
+```
+
+## Make calibration plot in test data
+```{r calib}
+
+calibdat = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modC")
+
+library(ggforce)
+ggplot(calibdat,aes(x=exp,y=obs)) +
+  # geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
+  #             linewidth=.5,alpha=.75) +
+  geom_abline(intercept=0,slope=1,color="darkgrey") +
+  geom_errorbar(aes(ymin=lower,ymax=upper)) +
+  geom_point(size=2,alpha=.8) + 
+  scale_x_continuous(limits=c(0,.1)) +
+  scale_y_continuous(limits=c(0,.1),
+                     oob = scales::rescale_none) +
+  # coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  facet_zoom(xlim=c(0,.03),ylim=c(0,.03),zoom.size=1,show.area=F) +  
+  theme_bw() +
+  theme(text=element_text(size=14)) +
+  labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
+ggsave("calib-overall-modC.png",width=8,height=4)
+
+# get overall observed and expected by status
+calib_statusC = lapply(1:6,function(i) {
+    makeCalibData(eight_sets_test_long %>% filter(status_at_start==i),q=1,"prob_outcome_6wk_modC") %>%
+      mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
+  })
+calib_statusC = do.call(rbind.data.frame,calib_statusC)
+calib_statusE = lapply(1:6,function(i) {
+    makeCalibData(eight_sets_test_long %>% filter(status_at_start==i),q=1,"prob_outcome_6wk_modE") %>%
+      mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
+  })
+calib_statusE = do.call(rbind.data.frame,calib_statusE)
+
+# make bar plot by status
+calib_status = inner_join(calib_statusC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
+                          calib_statusE %>% rename(expE.value=exp,expE.lower=exp.25,expE.upper=exp.75)) %>%
+  rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
+calib_status
+calib_status_long = calib_status %>%
+  pivot_longer(cols = matches("expC|expE|obs"), names_to = c("type",".value"),
+               names_sep = "\\.") %>%
+  mutate(type_fact = factor(type,levels=c("expC","expE","obs"),
+                            labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
+                                     "Predicted\nUS-CRS 2.0 -\nComplex",
+                                     "Observed")))
+ggplot(calib_status_long,
+       aes(x = factor(status), y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.9),
+    width = 0.2
+  ) +
+  coord_cartesian(ylim=c(0,.4)) +
+  # scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  labs(x = "Status", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
+# ggsave("calib-by-status-NEW.png",width=7.5,height=6.5)
+```
+
+
+## Calibration by status and exception
+```{r excepplot}
+# get overall observed and expected by status and exception
+levels = eight_sets_test_long %>% count(status_at_start,excep_at_start)
+calib_status_excepC = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(eight_sets_test_long %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modC") %>%
+      mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status_excepC = do.call(rbind.data.frame,calib_status_excepC)
+calib_status_excepE = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(eight_sets_test_long %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modE") %>%
+      mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status_excepE = do.call(rbind.data.frame,calib_status_excepE)
+
+# make bar plot by status
+calib_status_excep = inner_join(calib_status_excepC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
+                          calib_status_excepE %>% rename(expE.value=exp,expE.lower=exp.25,expE.upper=exp.75)) %>%
+  rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
+calib_status_excep
+calib_status_excep_long = calib_status_excep %>%
+  pivot_longer(cols = matches("expC|expE|obs"), names_to = c("type",".value"),
+               names_sep = "\\.") %>%
+  mutate(type_fact = factor(type,levels=c("expC","expE","obs"),
+                            labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
+                                     "Predicted\nUS-CRS 2.0 -\nComplex",
+                                     "Observed")))
+ggplot(calib_status_excep_long,
+       aes(x = factor(paste(status,exception,sep=".")), y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.9),
+    width = 0.2
+  ) +
+  coord_cartesian(ylim=c(0,.5)) +
+  # scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  scale_fill_viridis_d() +
+  labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
+ggsave("calib-by-excep-test.png",width=9.5,height=6.5)
+```
+
+## Calibration by diagnosis
+```{r}
+# get overall observed and expected by diagnosis
+diag_names = names(table(eight_sets_test_long$diagnosis_at_start))
+calib_diagC = lapply(diag_names,function(i) {
+    makeCalibData(eight_sets_test_long %>% filter(diagnosis_at_start==i),q=1,"prob_outcome_6wk_modC") %>% mutate(diag=i) %>% relocate(diag,.before=exp) %>% select(-risk_grp)
+  })
+calib_diagC = do.call(rbind.data.frame,calib_diagC)
+calib_diagE = lapply(diag_names,function(i) {
+    makeCalibData(eight_sets_test_long %>% filter(diagnosis_at_start==i),q=1,"prob_outcome_6wk_modE") %>% mutate(diag=i) %>% relocate(diag,.before=exp) %>% select(-risk_grp)
+  })
+calib_diagE = do.call(rbind.data.frame,calib_diagE)
+
+# make bar plot by status
+calib_diag = inner_join(calib_diagC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
+                          calib_diagE %>% rename(expE.value=exp,expE.lower=exp.25,expE.upper=exp.75)) %>%
+  rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
+calib_diag
+calib_diag_long = calib_diag %>%
+  pivot_longer(cols = matches("expC|expE|obs"), names_to = c("type",".value"),
+               names_sep = "\\.") %>%
+  mutate(type_fact = factor(type,levels=c("expC","expE","obs"),
+                            labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
+                                     "Predicted\nUS-CRS 2.0 -\nComplex",
+                                     "Observed")))
+calib_diag_long = calib_diag_long %>%
+  mutate(diag_label = case_when(
+    diag %in% "Amyloid" ~ "Amyloid",
+    diag %in% "Dilated_CM" ~ "Dilated",
+    diag %in% "Hypertrophic" ~ "Hypertrophic",
+    diag %in% "Restricted" ~ "Restricted",
+    diag %in% "Re-Transplant" ~ "Retransplant",
+    T ~ diag
+  ),
+  diag_label = factor(diag_label,levels=c("Amyloid","Congenital","Dilated","Hypertrophic","Ischemic","Retransplant","Restricted","Valvular","Other")))
+ggplot(calib_diag_long,
+       aes(x = diag_label, 
+           y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  # geom_errorbar(
+  #   aes(ymin = lower, ymax = upper),
+  #   position = position_dodge(width = 0.9),
+  #   width = 0.2
+  # ) +
+  coord_cartesian(ylim=c(0,.05)) +
+  scale_fill_viridis_d() +
+  # scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  labs(x = "Diagnosis", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
+ggsave("calib-by-diag-test.png",width=11,height=6.5)
+```

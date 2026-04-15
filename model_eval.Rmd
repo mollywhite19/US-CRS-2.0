@@ -1,0 +1,798 @@
+---
+title: "mortality model assessment"
+output: html_document
+date: "2024-07-15"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+# load("C:/Users/mhwhi/Downloads/mortality-model.RData")
+# load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
+# Grace
+base::load("mortality-model-options.Rdata")
+base::load("mortality-model-lasso-options.Rdata")
+base::load("mortality_model_test_data.RData")
+library(rms)
+library(tidyr)
+library(dplyr)
+library(haven)
+library(tidyr)
+library(purrr)
+library(riskRegression)
+library(survival)
+library(ggplot2)
+library(splines)
+```
+
+```{r}
+test_data = test_data %>% mutate(can_listing_dt = as.Date(can_listing_dt),
+                                 transplant_date = as.Date(transplant_date))
+
+table(test_data$status,useNA="ifany")
+```
+
+# Code waiting time at status
+```{r}
+# wait time determined by status
+test_data = test_data %>%
+  mutate(wait_time = case_when(
+    status == 1 ~ wait_1,
+    status == 2 ~ wait_2,
+    status == 3 ~ wait_3,
+    status == 4 ~ wait_4,
+    status == 5 ~ wait_5,
+    status == 6 ~ wait_6
+  ))
+
+
+```
+
+# Rename variables "at_start" for prediction
+```{r}
+#start variables for the model testing
+test_data = test_data %>% mutate(
+  bilirubin_at_start = bilirubin,
+  albumin_at_start = albumin,
+  eGFR_at_start = eGFR,
+  BNP_NT_Pro_at_start = ifelse(BNP_NT_Pro == 1, as.character(1), as.character(0)),
+  BNP_at_start = BNP,
+  sodium_at_start = sodium,
+  durable_LVAD_at_start = durable_LVAD,
+  short_mcs_ever_at_start = short_MCS_ever,
+  cpo_at_start = cpo,
+  api_at_start = api,
+  papi_at_start = papi,
+  lvad_years_at_start = lvad_years,
+  impella_at_start = impella,
+  iabp_at_start = iabp,
+  iabp_ever_at_start = iabp_ever,
+  impella_ever_at_start = impella_ever,
+  diagnosis_at_start = diagnosis
+)
+```
+
+# Calculate time to event
+Also: Remove inactive rows and trim continuous variables, for prediction.
+```{r}
+# Time to event based on death, removal for deterioration, tx, or censoring
+
+test_data = test_data %>% mutate(
+  time_to_death = case_when(
+    !is.na(death_time) ~ death_time - interval_start,
+    TRUE ~ NA
+  ),
+  time_to_removal_deteriorate = case_when(
+    !is.na(CAN_REM_CD) & CAN_REM_CD == 13 ~ removal_time - interval_start,
+    TRUE ~ NA
+  ),
+  time_to_transplant = as.numeric(case_when(
+    any(transplant == 1) ~ as.Date(transplant_date) - current_date,
+    TRUE ~ NA
+  ))
+) 
+
+test_data = test_data %>% 
+  mutate(
+    time = pmin(time_to_transplant, time_to_death, time_to_removal_deteriorate, 42, na.rm = T)
+  )
+
+# define follow up time in weeks, outcome dependent on whether it occurred in interval
+test_data = test_data %>% 
+  mutate(
+    follow_up_int = case_when(
+      time == time_to_transplant ~ floor(time/7),
+      time == time_to_death ~ ceiling(time/7),
+      time == time_to_removal_deteriorate ~ ceiling(time/7),
+      TRUE ~ 6
+    ),
+    outcome = case_when(
+      time == time_to_transplant ~ 0,
+      time == time_to_death ~ 1,
+      time == time_to_removal_deteriorate ~ 1,
+      TRUE ~ 0
+    )
+  )
+
+#filter out inactives and post delisting dates
+test_data_actives = test_data %>% filter(!(status %in% c("inactive", "off_waitlist")) & !is.na(status))
+
+# truncate at cutoffs from modeling data
+trim=read.csv("trim_values.csv") %>%
+  mutate(var=paste0(var,"_at_start"))
+test_data_actives = test_data_actives %>%
+  mutate(across(c(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,cpo_at_start,api_at_start,papi_at_start), ~ {
+    var <- cur_column()
+    min_val <- trim$min[trim$var == var]
+    max_val <- trim$max[trim$var == var]
+    pmin(pmax(., min_val), max_val)
+  })) %>%
+  mutate(lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start)) %>%
+  mutate(BNP_at_start = case_when(
+           BNP_NT_Pro_at_start==0 & BNP_at_start<trim$min[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==0] ~ trim$min[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==0],
+           BNP_NT_Pro_at_start==0 & BNP_at_start>trim$max[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==0] ~ trim$max[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==0],
+           BNP_NT_Pro_at_start==1 & BNP_at_start<trim$min[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==1] ~ trim$min[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==1],
+           BNP_NT_Pro_at_start==1 & BNP_at_start>trim$max[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==1] ~ trim$max[trim$var=="BNP_at_start" & trim$BNP_NT_Pro_at_start==1],
+           T ~ BNP_at_start)
+  )
+
+```
+
+# Create nonoverlapping test intervals by calendar date
+The validation dataset is from 9/1/23-8/31/24, so intervals should start on: 9/1/23, 10/15/23, 12/1/23, 1/15/24, 3/1/24, 4/15/24, 6/1/24, 7/15/24.
+
+The test dataset is from 9/1/24-8/31/25, so intervals should start on: 9/1/24, 10/15/24, 12/1/24, 1/15/25, 3/1/25, 4/15/25, 6/1/25, 7/15/25.
+
+```{r}
+library(lubridate)
+valid_dates = c(ymd("2023-09-01"),ymd("2023-10-15"),ymd("2023-12-01"),ymd("2024-01-15"),ymd("2024-03-01"),ymd("2024-04-15"),ymd("2024-06-01"),ymd("2024-07-15"))
+test_dates = c(ymd("2024-09-01"),ymd("2024-10-15"),ymd("2024-12-01"),ymd("2025-01-15"),ymd("2025-03-01"),ymd("2025-04-15"),ymd("2025-06-01"),ymd("2025-07-15"))
+
+# Subset data at certain calendar dates
+# Calculate wait time at specific calendar date
+# Calculate "rank" based on status (1-6) and waiting time
+  ## If status and wait time are the same, set the rank to be equal
+
+make_eight_ints = function(dates) {
+  if (length(dates)!=8) {
+    stop("dates vector does not have length 8")
+  }
+  
+  first_int = test_data_actives %>% 
+    filter(current_date <= dates[1] & current_date > (dates[1]-days(7))) %>% 
+    mutate(int = 1,
+           wait_time = wait_time + as.numeric(dates[1] - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup
+  
+  second_int = test_data_actives %>% 
+    filter(current_date <= dates[2] & current_date > (dates[2]-days(7))) %>% 
+    mutate(int = 2,
+           wait_time = wait_time + as.numeric(as.Date("2023-02-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup  
+  
+  third_int = test_data_actives %>% 
+    filter(current_date <= dates[3] & current_date > (dates[3]-days(7))) %>% 
+    mutate(int = 3,
+           wait_time = wait_time + as.numeric(as.Date("2023-04-01") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  fourth_int = test_data_actives %>% 
+    filter(current_date <= dates[4] & current_date > (dates[4]-days(7))) %>% 
+    mutate(int = 4,
+           wait_time = wait_time + as.numeric(as.Date("2023-05-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  fifth_int = test_data_actives %>% 
+    filter(current_date <= dates[5] & current_date > (dates[5]-days(7))) %>% 
+    mutate(int = 5,
+           wait_time = wait_time + as.numeric(as.Date("2023-07-01") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  sixth_int = test_data_actives %>% 
+    filter(current_date <= dates[6] & current_date > (dates[6]-days(7))) %>% 
+    mutate(int = 6,
+           wait_time = wait_time + as.numeric(as.Date("2023-08-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  seventh_int = test_data_actives %>% 
+    filter(current_date <= dates[7] & current_date > (dates[7]-days(7))) %>% 
+    mutate(int = 7,
+           wait_time = wait_time + as.numeric(as.Date("2023-10-01") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup  
+  
+  eighth_int = test_data_actives %>% 
+    filter(current_date <= dates[8] & current_date > (dates[8]-days(7))) %>% 
+    mutate(int = 8,
+           wait_time = wait_time + as.numeric(as.Date("2023-11-15") - current_date)) %>%
+    ungroup() %>% arrange(status, desc(wait_time)) %>% 
+    mutate(rank = row_number()) %>% 
+    group_by(status, wait_time) %>%
+    mutate(rank = first(rank)) %>% ungroup 
+  
+  
+  # Combine into dataset for pooled AUC
+  eight_sets = rbind(first_int, second_int, third_int, fourth_int, fifth_int, sixth_int, seventh_int, eighth_int)
+  return(eight_sets)
+}
+eight_sets_valid = make_eight_ints(valid_dates)
+eight_sets_test = make_eight_ints(test_dates)
+
+# check coding
+eight_sets_valid %>%
+  filter(int==1) %>%
+  filter(status == 4) %>% arrange(desc(wait_time)) %>% 
+  select(PX_ID, status, wait_time, rank) %>% head
+```
+
+# Function to calculate US-CRS 1.0 log odds
+```{r uscrs1}
+uscrs1 = function(albumin,bilirubin,eGFR,sodium,lvad,mcs,BNP,NTpro) {
+  return(-.656*albumin
+         +.617*log(bilirubin+1) 
+         -.012*eGFR
+         -.077*sodium
+         -.377*lvad
+         +1.092*mcs
+         +.433*log(BNP+1)*(NTpro==0)
+         +.224*log(BNP+1)*(NTpro==1)
+         )
+}
+
+```
+
+# Flip rankings so that higher = higher risk
+```{r}
+# Flip the predictors to be higher when the candidate is higher risk of death
+
+eight_sets_valid = eight_sets_valid %>% 
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
+  status_flipped = 1/as.numeric(status)
+)
+eight_sets_test = eight_sets_test %>% 
+  ungroup() %>% mutate(
+  rank = 1/rank,
+  uscrs = uscrs1(albumin,bilirubin,eGFR,sodium,durable_LVAD,short_MCS_ever,BNP,BNP_NT_Pro),
+  uscrs_trim = uscrs1(albumin_at_start,bilirubin_at_start,eGFR_at_start,sodium_at_start,durable_LVAD_at_start,short_mcs_ever_at_start,BNP_at_start,BNP_NT_Pro_at_start),
+  status_flipped = 1/as.numeric(status)
+)
+```
+
+# Calculate predicted 6-week survival probabilities with US-CRS 2.0
+Try out all of the potential models (models A-G) in validation data (`eight_sets_valid`). Try out Model C and Model E (with linear splines) in test data (`eights_sets_test`).
+```{r}
+# load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
+base::load("mort-pred-fun.Rdata")
+
+# apply to eight_sets_valid
+eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
+eight_sets_valid_modB = pred_data_fun(eight_sets_valid,mortality_modelB)
+eight_sets_valid_modC = pred_data_fun(eight_sets_valid,mortality_modelC)
+eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
+eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
+eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
+eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
+eight_sets_valid_modH = pred_data_fun(eight_sets_valid,mortality_modelH,lasso=T)
+
+# new variables created by pred_data_fun
+names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
+
+# save results
+save(eight_sets_valid_modA,eight_sets_valid_modB,
+     eight_sets_valid_modC,eight_sets_valid_modD,
+     eight_sets_valid_modE,eight_sets_valid_modF,
+     eight_sets_valid_modG,eight_sets_valid_modH,
+     file="eight-sets-valid.Rdata")
+
+# apply to eight_sets_test
+eight_sets_test_modC = pred_data_fun(eight_sets_test,mortality_modelC)
+base::load("mortality-modelE-linear.Rdata")
+eight_sets_test_modE = pred_data_fun(eight_sets_test,mortality_modelE_linear,linear_spline=T)
+save(eight_sets_test_modC,eight_sets_test_modE,file="eight-sets-test.Rdata")
+```
+
+# Calculate AUC in each interval of validation set and take average
+Calculate "Mean 6-Week AUC" in validation dataset (across 8 calendar cross-sections) for each potential model.
+```{r}
+getMeanAUC = function(moddata) {
+  auc_results = sapply(1:dim(table(moddata$int)),function(i) {
+    data_i <- moddata %>% filter(int==i)
+    auc_tmp <- Score(
+      list("uscrs2" = data_i$prob_outcome_6wk),
+      formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
+                eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+                durable_LVAD + short_MCS_ever + status,
+      data = data_i %>% 
+                mutate(time = ifelse(outcome == 0, time + 0.001, time)),
+      cens.method = "ipcw", cens.model = "cox",
+      conf.int = TRUE,
+      times = 42,
+      metrics = c("auc"),
+      conservative = TRUE
+    )
+    return(auc_tmp$AUC$score[["AUC"]])
+  })
+  return(mean(auc_results))
+}
+getMeanAUC(eight_sets_valid_modA)
+getMeanAUC(eight_sets_valid_modB)
+getMeanAUC(eight_sets_valid_modC)
+getMeanAUC(eight_sets_valid_modD)
+getMeanAUC(eight_sets_valid_modE)
+getMeanAUC(eight_sets_valid_modF)
+getMeanAUC(eight_sets_valid_modG)
+getMeanAUC(eight_sets_valid_modH)
+getMeanAUC(eight_sets_test_modC) # .807
+getMeanAUC(eight_sets_test_modE) # .798
+```
+
+# Calculate AUC in each interval of test set
+```{r}
+# create one test set with both model predictions
+eight_sets_test_mod = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,int,
+                                                                rank,uscrs,uscrs_trim,status_flipped,
+                                                                time,outcome,albumin,bilirubin,
+                                                                eGFR,sodium,BNP,BNP_NT_Pro,
+                                                                durable_LVAD,short_MCS_ever,status,
+                                                                prob_outcome_6wk_modC=prob_outcome_6wk,
+                                                                haz_dth_modC=haz_dth_nowk),
+                                eight_sets_test_modE %>% select(PX_ID,current_date,int,
+                                                                prob_outcome_6wk_modE=prob_outcome_6wk,
+                                                                haz_dth_modE=haz_dth_nowk),
+                                by=c("PX_ID","current_date","int"))
+summary(eight_sets_test_mod$prob_outcome_6wk_modC)
+summary(eight_sets_test_mod$prob_outcome_6wk_modE)
+
+# initialize lists
+auc_results <- list()
+p_val <- list()
+roc_plot <- list()
+
+# Loop through datasets to compute AUC
+for (i in 1:length(test_dates)) {
+  data_i <- eight_sets_test_mod %>% filter(int==i)
+  auc_tmp <- Score(
+    list("uscrs 2.0 simple" = data_i$prob_outcome_6wk_modC, "uscrs 2.0 complex" = data_i$prob_outcome_6wk_modE, "waiting time + status" = data_i$rank, "status only" = data_i$status_flipped, "uscrs 1.0" = data_i$uscrs),
+    formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
+              eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+              durable_LVAD + short_MCS_ever + status,
+    data = data_i %>% 
+              mutate(time = ifelse(outcome == 0, time + 0.001, time)),
+    cens.method = "ipcw", cens.model = "cox",
+    conf.int = TRUE,
+    times = 42,
+    metrics = c("auc"),
+    conservative = TRUE,
+    plots = "roc"
+  )
+  roc_plot[[i]] <- auc_tmp$ROC$plotframe %>% mutate(Date=test_dates[i])
+  p_val[[i]] <- auc_tmp$AUC$contrasts
+  auc_results[[i]] <- auc_tmp$AUC$score %>%
+    mutate(interval = paste0("Interval_", i))  # Add dataset identifier
+}
+pval_df <- do.call(rbind.data.frame,p_val)
+auc_df <- bind_rows(auc_results) %>%
+  mutate(Model=factor(model,levels=c("status only","waiting time + status","uscrs 2.0 simple","uscrs 2.0 complex","uscrs 1.0"),labels=c("Status (1-6)","Status (1-6) +\nWaiting Time","US-CRS 2.0 -\nSimple","US-CRS 2.0 -\nComplex","US-CRS 1.0")))
+roc_df <- do.call(rbind.data.frame,roc_plot)
+
+# add dates
+auc_df$Date <- rep(test_dates, each = dim(table(auc_df$Model)))
+pval_df$Date <- rep(test_dates, each = choose(dim(table(auc_df$Model)),2))
+
+# plot results
+ggplot(auc_df %>% filter(model!="uscrs 1.0"), 
+       aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
+  geom_line(position = position_dodge(width = 24),alpha=.85) +
+  geom_point(position = position_dodge(width = 24),size=2.5) +
+  geom_errorbar(position = position_dodge(width = 24),width=15,alpha=.85) +
+  labs(
+    #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
+    x = "Cross-section start date",
+    y = "Time-dependent AUC (6-week mortality)"
+  ) +
+  theme_bw() +
+  theme(
+    panel.background = element_rect(fill = "white", color = "white"),
+    plot.background = element_rect(fill = "white", color = NA), 
+    
+    # Increase font sizes
+    # plot.title = element_text(size = 18),
+    # axis.title.x = element_text(size = 16), 
+    # axis.title.y = element_text(size = 16),
+    
+    # axis.text = element_text(size = 10),
+    # legend.title = element_text(size = 14),
+    # legend.text = element_text(size = 11),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    
+    text=element_text(size=12),
+    legend.key.spacing.y = unit(.5, "lines")
+  ) +
+  scale_y_continuous(limits = c(0,1)) +
+  scale_x_continuous(
+    breaks = as.numeric(test_dates),
+    labels = format(test_dates, "%m/%d/%Y"),
+    minor_breaks=F
+  ) +
+  scale_shape_manual(values=c(16,17,15,12)) +
+  scale_color_viridis_d(direction=-1)
+  # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
+  # scale_linetype_manual(values = c("dashed","solid","solid"))
+ggsave("uscrs_auc_comparison-test.png", width = 7, height = 4, dpi = 300)
+
+# look for significant differences in AUC
+pval_df %>% filter(p<0.05)
+pval_df %>% filter(model=="uscrs 2.0 simple" | reference=="uscrs 2.0 simple",
+                   model!="uscrs 1.0",reference!="uscrs 1.0") %>%
+  select(model,reference,delta.AUC,p,Date) %>%
+  mutate(signif=p<0.05) %>% arrange(desc(signif))
+pval_df %>% filter(model=="uscrs 2.0 complex" | reference=="uscrs 2.0 complex",
+                   model!="uscrs 1.0",reference!="uscrs 1.0") %>%
+  select(model,reference,delta.AUC,p,Date) %>%
+  mutate(signif=p<0.05) %>% arrange(desc(signif))
+# the USCRS 2.0 models are basically the same - significantly better than status or status + waiting time on 3/8 dates
+
+# make faceted ROC plots
+
+roc_df = roc_df %>% mutate(Model=factor(model,levels=c("status only","waiting time + status","uscrs 2.0 simple","uscrs 2.0 complex","uscrs 1.0"),labels=c("Status (1-6)","Status (1-6) +\nWaiting Time","US-CRS 2.0 -\nSimple","US-CRS 2.0 -\nComplex","US-CRS 1.0"))) %>% filter(model!="uscrs 1.0")
+ggplot(roc_df, 
+       aes(x = FPR, y = TPR, color = Model)) +
+  geom_line(linewidth=.95,alpha=.85) +
+  geom_point(data=roc_df %>% filter(model=="status only"),aes(x=FPR,y=TPR),size=1.75) +
+  scale_color_viridis_d(direction=-1) +
+  scale_x_continuous(breaks=seq(0,1,.25),labels=c("0",".25",".5",".75","1")) +
+  facet_wrap(~Date,nrow=2) +
+  labs(x = "False Positive Rate", y = "True Positive Rate", color="Model") +
+  theme_bw() + 
+  theme(text=element_text(size=12),
+        legend.key.spacing.y = unit(.5, "lines")) +
+  ylim(c(0,1))
+ggsave("uscrs_roc_comparison-test.png", width = 7, height = 4, dpi = 300)
+```
+
+<!-- # Calibration -->
+
+```{r calib}
+# calib <- Score(
+#   list("uscrs" = eight_sets$prob_outcome_6wk),
+#   formula = Hist(time, outcome) ~ 1,#albumin + log(bilirubin+1) + eGFR + sodium + log(BNP+1)*BNP_NT_Pro + durable_LVAD + short_MCS_ever + status,
+#   data = eight_sets %>% mutate(time = ifelse(outcome==0,time+0.001,time)),
+#   # cens.method = "ipcw", cens.model = "cox",
+#   # conf.int = TRUE,
+#   times = 42,
+#   # metrics = c("auc"),
+#   conservative = T,
+#   plots = "calibration"
+# )
+# plotCalibration(calib,
+#                 xlim=c(0,.1),ylim=c(0,.1),
+#                 method="quantile",cens.method="local",q=10,
+#                 auc.in.legend=F,brier.in.legend=F)
+# plotCalibration(calib,bars=T,ylim=c(0,.1),cens.method="local")
+```
+
+
+
+```{r}
+# Function to calculate AUC using predicted probabilities directly
+# calculate_auc = function(data, prob_column) {
+#   auc_value <- Score(list(data[[prob_column]]), 
+#                      formula = death6week ~ 1,  # Only the response variable
+#                      data = data, 
+#                      metrics = c("AUC"), 
+#                      model = FALSE)  # Set model to FALSE
+#   
+#   # Extract AUC and CI
+#   auc <- auc_value$AUC$score$AUC
+#   ci_low <- auc_value$AUC$score$lower  # Lower CI
+#   ci_high <- auc_value$AUC$score$upper # Upper CI
+#   
+#   return(c(AUC = auc, CI_Lower = ci_low, CI_Upper = ci_high))
+# }
+# 
+# # List of datasets
+# datasets <- list(
+#   first_int = first_int,
+#   second_int = second_int,
+#   third_int = third_int,
+#   fourth_int = fourth_int,
+#   fifth_int = fifth_int,
+#   sixth_int = sixth_int,
+#   seventh_int = seventh_int,
+#   eighth_int = eighth_int
+# )
+# 
+# # Specify the column names for the predicted probabilities and rank
+# prob_column_name <- "uscrs_score"  # Column for first predictor
+# rank_column_name <- "rank"  # Column for second predictor
+# 
+# # Initialize a data frame to store results
+# results <- data.frame(Model = character(), 
+#                       AUC = numeric(), 
+#                       CI_Lower = numeric(), 
+#                       CI_Upper = numeric(),
+#                       Predictor = character())  # To differentiate predictors
+# 
+# # Loop through datasets and compute AUCs for both predictors
+# for (i in seq_along(datasets)) {
+#   data_name <- paste0("Model ", i)  # Set model name as Model 1, Model 2, etc.
+#   data <- datasets[[i]]
+#   
+#   # Calculate AUC for prob_surv_sweights
+#   auc_result_prob <- calculate_auc(data, prob_column_name)
+#   results <- rbind(results, data.frame(Model = data_name, 
+#                                         AUC = auc_result_prob["AUC"], 
+#                                         CI_Lower = auc_result_prob["CI_Lower"], 
+#                                         CI_Upper = auc_result_prob["CI_Upper"],
+#                                         Predictor = "US-CRS 2.0"))
+#   
+#   # Calculate AUC for rank
+#   auc_result_rank <- calculate_auc(data, rank_column_name)
+#   results <- rbind(results, data.frame(Model = data_name, 
+#                                         AUC = auc_result_rank["AUC"], 
+#                                         CI_Lower = auc_result_rank["CI_Lower"], 
+#                                         CI_Upper = auc_result_rank["CI_Upper"],
+#                                         Predictor = "Status Quo"))
+# }
+# 
+# # Convert Model to a factor with specified levels for ordering
+# results$Model <- factor(results$Model, levels = paste0("Model ", 1:8))
+# dates = as.Date(c("2023-01-01", "2023-02-15", "2023-04-01", "2023-05-15", 
+#                           "2023-07-01", "2023-08-15", "2023-10-01", "2023-11-15"))
+# results$Date <- rep(dates, each = 2)
+# 
+# 
+# # Plot AUC values with confidence intervals
+# ggplot(results, aes(x = Date, y = AUC, ymin = CI_Lower, ymax = CI_Upper, color = Predictor)) +
+#   geom_point() +
+#   geom_line() +
+#   geom_errorbar(alpha = 0.3) +
+#   labs(title = "AUC Comparison 2023",
+#        x = "Date",
+#        y = "AUC Value") +
+#   theme_minimal() +
+#   scale_y_continuous(limits = c(0,1)) + 
+#   scale_x_continuous(breaks = as.numeric(dates), 
+#                      labels = c("1/1/2023", "2/15/2023", "4/1/2023", "5/15/2023", 
+#                                 "7/1/2023", "8/15/2023", "10/1/2023", "11/15/2023")) # Adjust x-axis formatting as needed
+```
+
+```{r}
+# Load necessary libraries
+# library(pROC)
+# 
+# # Select a single dataset (time point)
+# selected_data <- second_int  # Change this to select a different time point
+# 
+# # Specify the predicted probability column names
+# prob_column_name <- "prob_surv_sweights"  # Predictor 1 (US-CRS 2.0)
+# rank_column_name <- "rank"  # Predictor 2 (Status Quo)
+# 
+# # Compute ROC curves for both predictors
+# roc_prob <- roc(selected_data$death6week, selected_data[[prob_column_name]])  # US-CRS 2.0
+# roc_rank <- roc(selected_data$death6week, selected_data[[rank_column_name]])  # Status Quo
+# 
+# # Extract ROC data for both models
+# roc_data_prob <- data.frame(
+#   specificity = rev(roc_prob$specificities),
+#   sensitivity = rev(roc_prob$sensitivities),
+#   model = "US-CRS 2.0"
+# )
+# 
+# roc_data_rank <- data.frame(
+#   specificity = rev(roc_rank$specificities),
+#   sensitivity = rev(roc_rank$sensitivities),
+#   model = "Status Quo"
+# )
+# 
+# # Combine data for both models
+# roc_data <- rbind(roc_data_prob, roc_data_rank)
+# 
+# # Plot ROC curves using ggplot2
+# ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+#   geom_line(size = 1) +  # ROC curves
+#   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +  # Diagonal line
+#   labs(title = "ROC Curve on Feb 15, 2023",
+#        x = "False positive rate",
+#        y = "True positive rate",
+#        color = "Predictor") +
+#   scale_color_manual(values = c("blue", "red")) +  # Custom colors for differentiation
+#   theme_minimal()
+
+```
+
+```{r}
+# getHR = function(mod,vars,comb=rep(1,length(vars)),cov=vcov(mod),alpha=0.05) {
+#   # get beta from mod object
+#   beta = coef(mod)
+#   beta[is.na(beta)] = 0
+#   
+#   # get combination vector
+#   c = rep(0,length(beta))
+#   names(c) = names(beta)
+#   c[vars] = comb
+#   
+#   # compute the HR
+#   xb = c %*% beta
+#   hr = exp(xb)
+#   
+#   if (!all.equal(names(c),colnames(cov))) {
+#     stop("Mismatched names bw beta and var-cov matrix")
+#   }
+#   
+#   # compute the 95% CI
+#   se = sqrt(t(c) %*% cov %*% c)
+#   lowCI = exp(xb - qnorm(1-alpha/2)*se)
+#   highCI = exp(xb + qnorm(1-alpha/2)*se)
+#   p = pnorm(abs(xb/se),lower.tail=F)*2
+#   return(data.frame(hr,lowCI,highCI,p))
+# }
+```
+
+
+```{r}
+# library(dplyr)
+# library(splines)
+# library(tidyr)
+# library(ggplot2)
+# library(rms)
+# library(survey) # for svydesign and svyCreateTableOne
+# library(tableone)
+# library(sandwich)
+# library(ggplot2)
+# library(dplyr)
+# 
+# # Summary with robust CIs
+# mortality_model_sweights_VCOV = vcovCL(mortality_model_sweights_lvad_time_lvad_time, cluster = ~ PX_ID)
+# mortality_model_sweights_lvad_sum = do.call(rbind.data.frame, lapply(names(coef(mortality_model_sweights_lvad_time_lvad_time)), function(var_interest) {
+#   bind_cols(var = var_interest, getHR(mortality_model_sweights_lvad_time_lvad_time, vars = var_interest, cov = mortality_model_sweights_VCOV))
+# }))
+# 
+# # Filter out intercept
+# plotdat = mortality_model_sweights_lvad_sum %>%
+#   filter(var != "(Intercept)") %>%
+#   mutate(model = "Stabilized Weights + LVAD Time")
+# 
+# plotdat = plotdat %>% filter(!grepl("rcs", var))
+# # Hazard Ratio Forest Plot
+# ggplot(plotdat, aes(x = hr, y = var)) +
+#   geom_point(position = position_dodge(width = 0.5)) +
+#   geom_errorbarh(aes(xmin = lowCI, xmax = highCI), height = 0.2, position = position_dodge(width = 0.5)) +
+#   labs(x = "Hazard Ratio (95% CI)", y = "Term", title = "Model Hazard Ratios") +
+#   geom_vline(xintercept = 1, linetype = "dashed") 
+# 
+# # Save plot
+# ggsave("stabilized_weights_lvad_time_HR.png", height = 7, width = 16)
+# plotdat
+```
+```{r}
+# library(dplyr)
+# library(ggplot2)
+# library(splines) # for cubic splines
+# library(sandwich) # for robust standard errors
+# library(lmtest) # for coefficient testing
+# 
+# # Step 1: Define Reference Value for LVAD Years
+# ref_lvad_years <- 0 # Baseline category (e.g., 0 years)
+# lvad_years_values <- c(0, 1, 2, 5)  # Define key points for estimation
+# 
+# # Step 2: Create a Data Frame for Prediction
+# newdata <- expand.grid(
+#   albumin_at_start = median(combined_df$albumin_at_start, na.rm = TRUE),
+#   bilirubin_at_start = median(combined_df$bilirubin_at_start, na.rm = TRUE),
+#   eGFR_at_start = median(combined_df$eGFR_at_start, na.rm = TRUE),
+#   BNP_at_start = median(combined_df$BNP_at_start, na.rm = TRUE),
+#   BNP_NT_Pro_at_start = median(combined_df$BNP_NT_Pro_at_start, na.rm = TRUE),
+#   sodium_at_start = median(combined_df$sodium_at_start, na.rm = TRUE),
+#   durable_LVAD_at_start = median(combined_df$durable_LVAD_at_start, na.rm = TRUE),
+#   short_mcs_ever_at_start = median(combined_df$short_mcs_ever_at_start, na.rm = TRUE),
+#   cpo_at_start = median(combined_df$cpo_at_start, na.rm = TRUE),
+#   api_at_start = median(combined_df$api_at_start, na.rm = TRUE),
+#   papi_at_start = median(combined_df$papi_at_start, na.rm = TRUE),
+#   lvad_years_at_start = lvad_years_values # Vary only this variable
+# )
+# 
+# # Step 3: Predict HRs from Model
+# predictions <- predict(mortality_model_sweights_lvad_time_lvad_time, newdata, type = "link", se.fit = TRUE)
+# 
+# # Step 4: Convert to Hazard Ratios
+# newdata <- newdata %>%
+#   mutate(
+#     log_hr = predictions$fit,
+#     hr = exp(log_hr),
+#     lowCI = exp(log_hr - 1.96 * predictions$se.fit),
+#     highCI = exp(log_hr + 1.96 * predictions$se.fit)
+#   )
+# 
+# # Step 5: Normalize Against Reference (LVAD Years = 0)
+# ref_hr <- newdata %>% filter(lvad_years_at_start == ref_lvad_years) %>% pull(hr)
+# newdata <- newdata %>%
+#   mutate(
+#     norm_hr = hr / ref_hr,
+#     norm_lowCI = lowCI / ref_hr,
+#     norm_highCI = highCI / ref_hr
+#   )
+# 
+# newdata = newdata %>% filter(lvad_years_at_start != 0)
+# # Step 6: Plot the Forest Plot
+# ggplot(newdata, aes(x = norm_hr, y = as.factor(lvad_years_at_start))) +
+#   geom_point(position = position_dodge(width = 0.5)) +
+#   geom_errorbarh(aes(xmin = norm_lowCI, xmax = norm_highCI), height = 0.2, position = position_dodge(width = 0.5)) +
+#   labs(x = "Hazard Ratio (95% CI)", y = "LVAD Years", title = "Hazard Ratio for LVAD Years") +
+#   geom_vline(xintercept=1, linetype="dashed") 
+# 
+# 
+
+```
+```{r}
+# newdata
+# newdata = newdata %>% select(lvad_years_at_start, norm_hr, norm_lowCI, norm_highCI) %>%
+#   rename(hr = norm_hr, lowCI = norm_lowCI, highCI = norm_highCI, var = lvad_years_at_start)
+# newdata = newdata %>% mutate(
+#     var = as.character(var)
+#   )
+# plotdat = plotdat %>% select(var, hr, lowCI, highCI)
+# forest_data = bind_rows(newdata, plotdat) %>% mutate(
+#   var = case_when(
+#     var == "1" ~ "LVAD Years = 1 [v. 0]",
+#     var == "2" ~ "LVAD Years = 2 [v. 0]",
+#     var == "5" ~ "LVAD Years = 5 [v. 0]",
+#     var == "albumin_at_start" ~ "Albumin",
+#     var == "log(bilirubin_at_start + 1)" ~ "Log Bilirubin",
+#     var == "eGFR_at_start" ~ "eGFR",
+#     var == "sodium_at_start" ~ "Sodium",
+#     var == "durable_LVAD_at_start" ~ "Durable LVAD",
+#     var == "short_mcs_ever_at_start" ~ "Short-term MCS",
+#     var == "cpo_at_start" ~ "CPO",
+#     var == "api_at_start" ~ "API",
+#     var == "papi_at_start" ~ "PAPI",
+#     var == "log(BNP_at_start + 1):BNP_NT_Pro_at_start0" ~ "Log BNP, Regular BNP",
+#     var == "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" ~ "Log BNP, NT-Pro BNP"
+#   )
+# )
+# 
+# forest_data
+```
+```{r}
+# 
+# ggplot(forest_data, aes(x = hr, y = var)) +
+#   geom_point(position = position_dodge(width = 0.5), size = 2) +
+#   geom_errorbarh(aes(xmin = lowCI, xmax = highCI), height = 0.3, position = position_dodge(width = 0.5)) +
+#   labs(x = "Hazard Ratio (95% CI)", y = "Term", title = "Model Hazard Ratios") +
+#   geom_vline(xintercept = 1, linetype = "dashed")  +
+#   theme_minimal() +  # Clean theme
+#   theme(
+#     plot.title = element_text(size = 18),  # Title larger & bold
+#     axis.title.x = element_text(size = 16),  # X-axis label
+#     axis.title.y = element_text(size = 16),  # Y-axis label
+#     axis.text.x = element_text(size = 14),  # X-axis tick labels
+#     axis.text.y = element_text(size = 14)# Legend title size
+#   )
+# 
+# ggsave("uscrs_forest_ro1.png", width = 12, height = 7)
+```
+
