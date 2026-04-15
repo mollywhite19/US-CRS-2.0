@@ -1,0 +1,134 @@
+---
+title: "uscrs_analysis"
+output: html_document
+date: "2024-06-18"
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+setwd("C:/Users/mhwhi/Downloads")
+load("discrete_final_data.RData")
+library(splines)
+library(tableone)
+library(survey)
+
+# remove people w/ weird statuses
+df_final %>% group_by(PX_ID) %>% filter(any(is.na(status)),!all(is.na(status)))
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  filter(!any(is.na(status))) %>%
+  ungroup()
+```
+
+## Model with only variables from US-CRS 1.0
+```{r}
+tx_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro +
+    durable_LVAD + short_MCS_ever), data = df_final, family = binomial)
+tx_model
+summary(tx_model)
+```
+## Model with US-CRS 1.0 vars and status
+```{r}
+tx_status_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status), data = df_final, family = binomial)
+
+tx_status_model
+summary(tx_status_model)
+```
+
+## Model with US-CRS 1.0 vars, status, and hemodynamics
+```{r}
+tx_status_hemo_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = df_final, family = binomial)
+
+tx_status_hemo_model
+summary(tx_status_hemo_model)
+```
+```{r}
+
+tx_status_hemo_waitlist_model = glm(formula = as.formula(
+   transplant ~ 
+    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+    ns(BNP, df = 3)*BNP_NT_Pro + 
+    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3) + ns(time_since_listing, df = 3)), data = df_final, family = binomial)
+
+tx_status_hemo_waitlist_model
+```
+
+
+## Predict probability of transplant, construct weight variables
+```{r}
+df_final$fit_prob_simple <- predict(tx_model, type = "response")
+df_final$fit_prob_status <- predict(tx_status_model, type = "response")
+df_final$fit_prob_hemo <- predict(tx_status_hemo_model, type = "response")
+df_final$fit_prob_waitlist <- predict(tx_status_hemo_waitlist_model, type = "response")
+
+df_final <- df_final %>%
+  mutate(weight_simple = if_else(transplant == 1, 1 / fit_prob_simple, 1 / (1 - fit_prob_simple)),
+         weight_status = if_else(transplant == 1, 1 / fit_prob_status, 1 / (1 - fit_prob_status)),
+         weight_hemo = if_else(transplant == 1, 1 / fit_prob_hemo, 1 / (1 - fit_prob_hemo)),
+         weight_waitlist = if_else(transplant == 1, 1 / fit_prob_waitlist, 1 / 1 - fit_prob_waitlist))
+
+```
+
+
+## Define variables for SMD tables, produce unweighted table
+```{r}
+vars <- c("albumin", "bilirubin", "eGFR", "sodium", "BNP", "BNP_NT_Pro", "durable_LVAD", "short_MCS_ever", "status", "cpo", "api", "papi", "time_since_listing")
+
+tabUnmatched <- CreateTableOne(vars = vars, strata = "transplant", data = df_final, test = FALSE)
+
+print(tabUnmatched, smd = TRUE)
+```
+
+## Define dataframe for simple weighted model
+## Print weighted SMD table
+```{r}
+df_weights_simple <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_simple)
+
+tabWeighted_simple <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_simple, test = FALSE)
+
+print(tabWeighted_simple, smd = TRUE)
+```
+
+
+## Define dataframe for weighted model with status
+## Print weighted SMD table
+```{r}
+df_weights_status <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_status)
+
+tabWeighted_status <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_status, test = FALSE)
+
+print(tabWeighted_status, smd = TRUE)
+```
+
+
+
+## Define dataframe for weighted model with status, hemo
+## Print weighted SMD table
+```{r}
+df_weights_hemo <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_hemo)
+
+tabWeighted_hemo <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_hemo, test = FALSE)
+
+print(tabWeighted_hemo, smd = TRUE)
+```
+## Define dataframe for weighted model with status, hemo
+## Print weighted SMD table
+```{r}
+df_weights_waitlist <- svydesign(ids = ~ 1, data = df_final, weights = ~ weight_waitlist)
+
+tabWeighted_waitlist <- svyCreateTableOne(vars = vars, strata = "transplant", data = df_weights_waitlist, test = FALSE)
+
+print(tabWeighted_waitlist, smd = TRUE)
+```
