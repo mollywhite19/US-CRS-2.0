@@ -362,8 +362,10 @@ calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modH")
 ```{r calib}
 
 calibdat = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modC")
+calibdatE = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modE")
 
 library(ggforce)
+# ggplot(calibdatE,aes(x=exp,y=obs)) +
 ggplot(calibdat,aes(x=exp,y=obs)) +
   # geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
   #             linewidth=.5,alpha=.75) +
@@ -379,6 +381,7 @@ ggplot(calibdat,aes(x=exp,y=obs)) +
   theme(text=element_text(size=14)) +
   labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
 ggsave("calib-overall-modC.png",width=8,height=4)
+# ggsave("calib-overall-modE.png",width=8,height=4)
 
 # get overall observed and expected by status
 calib_statusC = lapply(1:6,function(i) {

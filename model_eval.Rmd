@@ -444,8 +444,12 @@ ggplot(auc_df %>% filter(model!="uscrs 1.0"),
   # scale_linetype_manual(values = c("dashed","solid","solid"))
 ggsave("uscrs_auc_comparison-test.png", width = 7, height = 4, dpi = 300)
 
+# range of AUC
+auc_df %>% filter(model!="uscrs 1.0") %>%
+  arrange(model,AUC) %>% group_by(model) %>% slice(1,n())
+
 # look for significant differences in AUC
-pval_df %>% filter(p<0.05)
+pval_df %>% filter(p<0.05,model!="uscrs 1.0",reference!="uscrs 1.0")
 pval_df %>% filter(model=="uscrs 2.0 simple" | reference=="uscrs 2.0 simple",
                    model!="uscrs 1.0",reference!="uscrs 1.0") %>%
   select(model,reference,delta.AUC,p,Date) %>%
