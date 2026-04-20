@@ -100,14 +100,27 @@ mrdat = mrdat %>%
 #   return(pred_data)
 # }
 
+# compare manual calculation (from equation in paper) with pred_data_fun
+mrdatC = pred_data_fun(mrdat,mortality_modelC)
+round(coef(mortality_modelC),3)
+tmpdat = mrdatC %>%
+  mutate(log_odds=log(haz_dth_nowk/(1-haz_dth_nowk)),
+         BNP_NT_Pro_at_start=as.numeric(BNP_NT_Pro_at_start),
+         ## important to include lots of digits for sodium
+         log_odds2 = 7.45-.837*albumin_at_start+.911*log(bilirubin_at_start+1)-.00862*eGFR_at_start+.178*log(BNP_at_start+1)-1.449*BNP_NT_Pro_at_start+.139*log(BNP_at_start+1)*BNP_NT_Pro_at_start-.07954*sodium_at_start-.43*durable_LVAD_at_start+.757*iabp_at_start+.75*impella_at_start+1.676*short_mcs_ever_at_start
+         # log_odds2 = 7.45-.837*albumin_at_start+.911*log(bilirubin_at_start+1)-.0086*eGFR_at_start+.178*log(BNP_at_start+1)-1.45*BNP_NT_Pro_at_start+.139*log(BNP_at_start+1)*BNP_NT_Pro_at_start-.0795*sodium_at_start-.43*durable_LVAD_at_start+.757*iabp_at_start+.75*impella_at_start+1.676*short_mcs_ever_at_start
+  )
+with(tmpdat,summary(log_odds-log_odds2))
+
+
 # calculate predicted probabilities
-mrdat = pred_data_fun(mrdat,mortality_modelC) %>%
-  mutate(log_haz_dth=log(haz_dth)) %>%
-  rename(haz_dth_modC = haz_dth, log_haz_dth_modC = log_haz_dth,
+mrdat = mrdatC %>%
+  mutate(log_haz_dth=log(haz_dth_nowk)) %>%
+  rename(haz_dth_modC = haz_dth_nowk, log_haz_dth_modC = log_haz_dth,
          prob_outcome_6wk_modC = prob_outcome_6wk, prob_surv_6wk_modC = prob_surv_6wk) %>%
   pred_data_fun(.,mortality_modelE_linear,linear_spline=T) %>%
-  mutate(log_haz_dth=log(haz_dth)) %>%
-  rename(haz_dth_modE = haz_dth, log_haz_dth_modE = log_haz_dth,
+  mutate(log_haz_dth=log(haz_dth_nowk)) %>%
+  rename(haz_dth_modE = haz_dth_nowk, log_haz_dth_modE = log_haz_dth,
          prob_outcome_6wk_modE = prob_outcome_6wk, prob_surv_6wk_modE = prob_surv_6wk)
 
 # select PX_ID, current_date, USCRS 2.0 log hazards
