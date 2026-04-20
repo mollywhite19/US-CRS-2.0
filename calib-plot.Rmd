@@ -311,6 +311,7 @@ makeCalibData = function(data,q=10,risk_score="prob_outcome_6wk") {
     ipw.CI = summary(ipw.surv,times=6,extend=T)[c("surv","lower","upper")]
     # convert to mortality
     mort.CI = lapply(ipw.CI,function(surv) {1-surv})
+    mort.CI$std.err = summary(ipw.surv,times=6,extend=T)[["std.err"]]
     return(mort.CI)
   })
   obs_df = do.call(rbind.data.frame,obs_risks) %>%
@@ -341,9 +342,9 @@ calibStatStatus = function(joindat,risk_score) {
   calib_status = do.call(rbind.data.frame,calib_status)
   # return(calib_status %>% mutate(sqdiff=(100*(obs-exp))^2,diff=100*(obs-exp)) %>% select(status,obs,exp,sqdiff,diff))
   
-  # calculate average squared difference bw obs and exp across statuses
-  ## do this in percent (*100) for bigger numbers
-  return(with(calib_status,mean((100*(obs-exp))^2)))
+  # calculate sum of standardized squared difference bw obs and exp across statuses
+  ## https://www.sciencedirect.com/science/article/pii/S1532046416000496?via%3Dihub
+  return(with(calib_status,sum((obs-exp)^2/(std.err^2))))
 }
 calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modA")
 calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modB")
