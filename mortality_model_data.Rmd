@@ -2454,6 +2454,17 @@ pred_data1 = pred_data %>%
   filter(!is.na(status),status!="inactive") %>%
   arrange(PX_ID,current_date) %>%
   group_by(PX_ID) %>% slice_sample(n=1) %>% ungroup
+
+# distribution within status
+pred_data1 %>% filter(status==1) %>% count(round(uscrs2)==50)
+pred_data1 %>% group_by(status) %>% #,max_device) %>%
+  summarise(n=n(),med=median(uscrs2),
+            q25=quantile(uscrs2,.25),
+            q75=quantile(uscrs2,.75),
+            q05=quantile(uscrs2,.05),
+            q95=quantile(uscrs2,.95)) %>%
+  filter(status==4)
+
 ggplot(pred_data1 %>% 
          mutate(status=paste("Status",status),
                 status=factor(status,labels=c(
