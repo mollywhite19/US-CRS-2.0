@@ -108,10 +108,10 @@ tmpdat = mrdatC %>%
          BNP_NT_Pro_at_start=as.numeric(BNP_NT_Pro_at_start),
          ## important to include lots of digits for sodium
          log_odds2 = 7.45-.837*albumin_at_start+.911*log(bilirubin_at_start+1)-.00862*eGFR_at_start+.178*log(BNP_at_start+1)-1.449*BNP_NT_Pro_at_start+.139*log(BNP_at_start+1)*BNP_NT_Pro_at_start-.07954*sodium_at_start-.43*durable_LVAD_at_start+.757*iabp_at_start+.75*impella_at_start+1.676*short_mcs_ever_at_start
-         # log_odds2 = 7.45-.837*albumin_at_start+.911*log(bilirubin_at_start+1)-.0086*eGFR_at_start+.178*log(BNP_at_start+1)-1.45*BNP_NT_Pro_at_start+.139*log(BNP_at_start+1)*BNP_NT_Pro_at_start-.0795*sodium_at_start-.43*durable_LVAD_at_start+.757*iabp_at_start+.75*impella_at_start+1.676*short_mcs_ever_at_start
   )
 with(tmpdat,summary(log_odds-log_odds2))
-
+# Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+# 0.0003106 0.0009668 0.0019090 0.0017289 0.0023426 0.0039964 
 
 # calculate predicted probabilities
 mrdat = mrdatC %>%
