@@ -350,11 +350,11 @@ static_table = static_table %>%
     diagnosis %in% "Amyloid" ~ "Amyloid CM",
     diagnosis %in% "Dilated_CM" ~ "Dilated CM",
     diagnosis %in% "Hypertrophic" ~ "Hypertrophic CM",
-    diagnosis %in% "Restricted" ~ "Restricted CM",
+    diagnosis %in% "Restricted" ~ "Restrictive CM",
     diagnosis %in% "Re-Transplant" ~ "Retransplant",
     T ~ diagnosis
   ),
-  diag_label = factor(diag_label,levels=c("Amyloid CM","Congenital","Dilated CM","Hypertrophic CM","Ischemic","Retransplant","Restricted CM","Valvular","Other")))
+  diag_label = factor(diag_label,levels=c("Amyloid CM","Congenital","Dilated CM","Hypertrophic CM","Ischemic","Retransplant","Restrictive CM","Valvular","Other")))
 
 # make Table 1
 ## Age, sex, diagnosis, status, short-term MCS, Impella, IABP, LVAD, eGFR, sodium, BNP, albumin, bilirubin, API, PAPI, CPO
@@ -370,13 +370,14 @@ units(static_table$BNP) = "pg/mL"
 static_table$durable_LVAD = factor(static_table$durable_LVAD,labels=c("No","Yes"))
 label(static_table$durable_LVAD) = "Ever on durable LVAD"
 static_table$impella = factor(static_table$impella,labels=c("No","Yes"))
-label(static_table$impella) = "Current Impella"
+label(static_table$impella) = "Current MFP"
 static_table$iabp = factor(static_table$iabp,labels=c("No","Yes"))
 label(static_table$iabp) = "Current IABP"
 label(static_table$lvad_years) = "Years on LVAD"
 label(static_table$api) = "Aortic pulsatility index"
 label(static_table$papi) = "Pulmonary artery pulsatility index"
 label(static_table$cpo) = "Cardiac power output"
+units(static_table$cpo) = "W"
 table1(~ age_at_listing + CAN_GENDER + diag_label + status_label + short_MCS_ever + impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + eGFR + BNP + sodium + api + papi + cpo | train_test_split_label, 
        data=static_table, overall = F)
 
