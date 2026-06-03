@@ -190,9 +190,9 @@ names(eight_sets_valid)
 
 # do the same for eight_sets_test
 eight_sets_test = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,prob_outcome_6wk_modC=prob_outcome_6wk),
-                       eight_sets_test_modE %>% select(PX_ID,current_date,prob_outcome_6wk_modE=prob_outcome_6wk))
+                       eight_sets_test_modF %>% select(PX_ID,current_date,prob_outcome_6wk_modF=prob_outcome_6wk))
 summary(eight_sets_test$prob_outcome_6wk_modC)
-summary(eight_sets_test$prob_outcome_6wk_modE)
+summary(eight_sets_test$prob_outcome_6wk_modF)
 
 # confirm eight_sets and test_data are both unique by PX_ID and current_date
 nrow(eight_sets_valid);eight_sets_valid %>% distinct(PX_ID,current_date) %>% nrow
@@ -362,7 +362,7 @@ calibStatStatus(eight_sets_valid_long,"prob_outcome_6wk_modH")
 ```{r calib}
 
 calibdat = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modC")
-calibdatE = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modE")
+calibdatF = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modF")
 
 library(ggforce)
 # ggplot(calibdatE,aes(x=exp,y=obs)) +
@@ -381,7 +381,7 @@ ggplot(calibdat,aes(x=exp,y=obs)) +
   theme(text=element_text(size=14)) +
   labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)")
 ggsave("calib-overall-modC.png",width=8,height=4)
-# ggsave("calib-overall-modE.png",width=8,height=4)
+# ggsave("calib-overall-modF.png",width=8,height=4)
 
 # get overall observed and expected by status
 calib_statusC = lapply(1:6,function(i) {
@@ -389,21 +389,21 @@ calib_statusC = lapply(1:6,function(i) {
       mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
   })
 calib_statusC = do.call(rbind.data.frame,calib_statusC)
-calib_statusE = lapply(1:6,function(i) {
-    makeCalibData(eight_sets_test_long %>% filter(status_at_start==i),q=1,"prob_outcome_6wk_modE") %>%
+calib_statusF = lapply(1:6,function(i) {
+    makeCalibData(eight_sets_test_long %>% filter(status_at_start==i),q=1,"prob_outcome_6wk_modF") %>%
       mutate(status=i) %>% relocate(status,.before=exp) %>% select(-risk_grp)
   })
-calib_statusE = do.call(rbind.data.frame,calib_statusE)
+calib_statusF = do.call(rbind.data.frame,calib_statusF)
 
 # make bar plot by status
 calib_status = inner_join(calib_statusC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
-                          calib_statusE %>% rename(expE.value=exp,expE.lower=exp.25,expE.upper=exp.75)) %>%
+                          calib_statusF %>% rename(expF.value=exp,expF.lower=exp.25,expF.upper=exp.75)) %>%
   rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
 calib_status
 calib_status_long = calib_status %>%
-  pivot_longer(cols = matches("expC|expE|obs"), names_to = c("type",".value"),
+  pivot_longer(cols = matches("expC|expF|obs"), names_to = c("type",".value"),
                names_sep = "\\.") %>%
-  mutate(type_fact = factor(type,levels=c("expC","expE","obs"),
+  mutate(type_fact = factor(type,levels=c("expC","expF","obs"),
                             labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
                                      "Predicted\nUS-CRS 2.0 -\nComplex",
                                      "Observed")))
@@ -435,24 +435,24 @@ calib_status_excepC = lapply(1:nrow(levels),
       mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
 })
 calib_status_excepC = do.call(rbind.data.frame,calib_status_excepC)
-calib_status_excepE = lapply(1:nrow(levels),
+calib_status_excepF = lapply(1:nrow(levels),
                       function(xx) {
   i = levels$status_at_start[xx]
   j = levels$excep_at_start[xx]
-  makeCalibData(eight_sets_test_long %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modE") %>%
+  makeCalibData(eight_sets_test_long %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modF") %>%
       mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
 })
-calib_status_excepE = do.call(rbind.data.frame,calib_status_excepE)
+calib_status_excepF = do.call(rbind.data.frame,calib_status_excepF)
 
 # make bar plot by status
 calib_status_excep = inner_join(calib_status_excepC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
-                          calib_status_excepE %>% rename(expE.value=exp,expE.lower=exp.25,expE.upper=exp.75)) %>%
+                          calib_status_excepF %>% rename(expF.value=exp,expF.lower=exp.25,expF.upper=exp.75)) %>%
   rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
 calib_status_excep
 calib_status_excep_long = calib_status_excep %>%
-  pivot_longer(cols = matches("expC|expE|obs"), names_to = c("type",".value"),
+  pivot_longer(cols = matches("expC|expF|obs"), names_to = c("type",".value"),
                names_sep = "\\.") %>%
-  mutate(type_fact = factor(type,levels=c("expC","expE","obs"),
+  mutate(type_fact = factor(type,levels=c("expC","expF","obs"),
                             labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
                                      "Predicted\nUS-CRS 2.0 -\nComplex",
                                      "Observed")))
@@ -480,20 +480,20 @@ calib_diagC = lapply(diag_names,function(i) {
     makeCalibData(eight_sets_test_long %>% filter(diagnosis_at_start==i),q=1,"prob_outcome_6wk_modC") %>% mutate(diag=i) %>% relocate(diag,.before=exp) %>% select(-risk_grp)
   })
 calib_diagC = do.call(rbind.data.frame,calib_diagC)
-calib_diagE = lapply(diag_names,function(i) {
-    makeCalibData(eight_sets_test_long %>% filter(diagnosis_at_start==i),q=1,"prob_outcome_6wk_modE") %>% mutate(diag=i) %>% relocate(diag,.before=exp) %>% select(-risk_grp)
+calib_diagF = lapply(diag_names,function(i) {
+    makeCalibData(eight_sets_test_long %>% filter(diagnosis_at_start==i),q=1,"prob_outcome_6wk_modF") %>% mutate(diag=i) %>% relocate(diag,.before=exp) %>% select(-risk_grp)
   })
-calib_diagE = do.call(rbind.data.frame,calib_diagE)
+calib_diagF = do.call(rbind.data.frame,calib_diagF)
 
 # make bar plot by status
 calib_diag = inner_join(calib_diagC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
-                          calib_diagE %>% rename(expE.value=exp,expE.lower=exp.25,expE.upper=exp.75)) %>%
+                          calib_diagF %>% rename(expF.value=exp,expF.lower=exp.25,expF.upper=exp.75)) %>%
   rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
 calib_diag
 calib_diag_long = calib_diag %>%
-  pivot_longer(cols = matches("expC|expE|obs"), names_to = c("type",".value"),
+  pivot_longer(cols = matches("expC|expF|obs"), names_to = c("type",".value"),
                names_sep = "\\.") %>%
-  mutate(type_fact = factor(type,levels=c("expC","expE","obs"),
+  mutate(type_fact = factor(type,levels=c("expC","expF","obs"),
                             labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
                                      "Predicted\nUS-CRS 2.0 -\nComplex",
                                      "Observed")))

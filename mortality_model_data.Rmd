@@ -1609,7 +1609,12 @@ pred_data_fun = function(newdata,mod,lasso=F,linear_spline=F) {
          log_BNP_NT_Pro_at_start = ifelse(BNP_NT_Pro_at_start==1,log(BNP_at_start + 1),0),
          log_BNP_NT_Pro_at_start5 = ifelse(BNP_NT_Pro_at_start==1,
                                            ifelse(log_BNP_NT_Pro_at_start>5,log_BNP_NT_Pro_at_start-5,0),0),
-         sodium_at_start137 = ifelse(sodium_at_start>137,sodium_at_start-137,0)
+         sodium_at_start137 = ifelse(sodium_at_start>137,sodium_at_start-137,0),
+         api_at_start1.45 = ifelse(api_at_start > 1.45, api_at_start - 1.45, 0),
+         api_at_start6 = ifelse(api_at_start > 6, api_at_start - 6, 0),
+         cpo_at_start.8 = ifelse(cpo_at_start > .8, cpo_at_start - .8, 0),
+         lvad_years_at_start3 = ifelse(lvad_years_at_start > 3, lvad_years_at_start - 3, 0),
+         lvad_years_at_start5 = ifelse(lvad_years_at_start > 5, lvad_years_at_start - 5, 0)
   )
   }
   

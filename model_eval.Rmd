@@ -312,7 +312,9 @@ save(eight_sets_valid_modA,eight_sets_valid_modB,
 eight_sets_test_modC = pred_data_fun(eight_sets_test,mortality_modelC)
 base::load("mortality-modelE-linear.Rdata")
 eight_sets_test_modE = pred_data_fun(eight_sets_test,mortality_modelE_linear,linear_spline=T)
-save(eight_sets_test_modC,eight_sets_test_modE,file="eight-sets-test.Rdata")
+base::load("mortality-modelF-linear.Rdata")
+eight_sets_test_modF = pred_data_fun(eight_sets_test,mortality_modelF_linear,linear_spline=T)
+save(eight_sets_test_modC,eight_sets_test_modE,eight_sets_test_modF,file="eight-sets-test.Rdata")
 ```
 
 # Calculate AUC in each interval of validation set and take average
@@ -348,6 +350,7 @@ getMeanAUC(eight_sets_valid_modG)
 getMeanAUC(eight_sets_valid_modH)
 getMeanAUC(eight_sets_test_modC) # .807
 getMeanAUC(eight_sets_test_modE) # .798
+getMeanAUC(eight_sets_test_modF) # .795
 ```
 
 # Calculate AUC in each interval of test set
@@ -360,12 +363,12 @@ eight_sets_test_mod = full_join(eight_sets_test_modC %>% select(PX_ID,current_da
                                                                 durable_LVAD,short_MCS_ever,status,
                                                                 prob_outcome_6wk_modC=prob_outcome_6wk,
                                                                 haz_dth_modC=haz_dth_nowk),
-                                eight_sets_test_modE %>% select(PX_ID,current_date,int,
-                                                                prob_outcome_6wk_modE=prob_outcome_6wk,
-                                                                haz_dth_modE=haz_dth_nowk),
+                                eight_sets_test_modF %>% select(PX_ID,current_date,int,
+                                                                prob_outcome_6wk_modF=prob_outcome_6wk,
+                                                                haz_dth_modF=haz_dth_nowk),
                                 by=c("PX_ID","current_date","int"))
 summary(eight_sets_test_mod$prob_outcome_6wk_modC)
-summary(eight_sets_test_mod$prob_outcome_6wk_modE)
+summary(eight_sets_test_mod$prob_outcome_6wk_modF)
 
 # initialize lists
 auc_results <- list()
@@ -376,7 +379,7 @@ roc_plot <- list()
 for (i in 1:length(test_dates)) {
   data_i <- eight_sets_test_mod %>% filter(int==i)
   auc_tmp <- Score(
-    list("uscrs 2.0 simple" = data_i$prob_outcome_6wk_modC, "uscrs 2.0 complex" = data_i$prob_outcome_6wk_modE, "waiting time + status" = data_i$rank, "status only" = data_i$status_flipped, "uscrs 1.0" = data_i$uscrs),
+    list("uscrs 2.0 simple" = data_i$prob_outcome_6wk_modC, "uscrs 2.0 complex" = data_i$prob_outcome_6wk_modF, "waiting time + status" = data_i$rank, "status only" = data_i$status_flipped, "uscrs 1.0" = data_i$uscrs),
     formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
               eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
               durable_LVAD + short_MCS_ever + status,
