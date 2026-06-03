@@ -1657,6 +1657,7 @@ Models C and E had the best performance in validation data and will be compared 
 ## Convert natural cubic splines to linear splines
 For Model E, we need to refit with linear splines instead of natural cubic splines.
 ```{r}
+### MODEL E ###
 # bilirubin, eGFR, sodium, albumin, BNP
 
 ## create pred_data object for lab value ranges
@@ -1952,6 +1953,392 @@ ggsave("lab-coefs-by-splinetype.png",width=7.5,height=5,dpi=300)
 save(mortality_modelE_linear,file="mortality-modelE-linear.Rdata")
 
 ```
+
+```{r}
+### MODEL F ###
+# bilirubin, eGFR, sodium, albumin, BNP, lvad_years_at_start, API, CPO
+
+## calculate vcov for Model F
+mortality_modelF_VCOV = vcovCL(mortality_modelF, cluster = ~ PX_ID)
+
+## lvad_years
+lvadyr_range = with(pred_data,seq(min(lvad_years_at_start),max(lvad_years_at_start),length.out=200))
+lvadyr_spl = ns(lvadyr_range,df=3,
+              knots=c(1,3),
+              Boundary.knots=attr(mortality_modelF$model$`ns(lvad_years_at_start, df = 3, knots = c(1, 3))`,"Boundary.knots"))
+lvadyr_rr = cbind.data.frame(
+  lvad_years = lvadyr_range,
+  do.call(rbind.data.frame,apply(lvadyr_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("lvad_years",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)})))
+
+## API
+api_range = with(pred_data,seq(min(api_at_start),max(api_at_start),length.out=200))
+api_spl = ns(api_range,df=3,
+              knots=attr(mortality_modelF$model$`ns(api_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(api_at_start, df = 3)`,"Boundary.knots"))
+api_rr = cbind.data.frame(
+  api = api_range,
+  do.call(rbind.data.frame,apply(api_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("api",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)})))
+
+## CPO
+cpo_range = with(pred_data,seq(min(cpo_at_start),max(cpo_at_start),length.out=200))
+cpo_spl = ns(cpo_range,df=3,
+              knots=attr(mortality_modelF$model$`ns(cpo_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(cpo_at_start, df = 3)`,"Boundary.knots"))
+cpo_rr = cbind.data.frame(
+  cpo = cpo_range,
+  do.call(rbind.data.frame,apply(cpo_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("cpo",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)})))
+
+## bilirubin
+bili_spl = ns(bili_range,df=3,
+              knots=attr(mortality_modelF$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(log(bilirubin_at_start + 1), df = 3)`,"Boundary.knots"))
+bili_rr = cbind.data.frame(
+  bilirubin_trans = bili_range,
+  do.call(rbind.data.frame,apply(bili_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("bili",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)}))) %>%
+  mutate(bilirubin=exp(bilirubin_trans)-1)
+
+## eGFR
+egfr_spl = ns(egfr_range,df=3,
+              knots=attr(mortality_modelF$model$`ns(eGFR_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(eGFR_at_start, df = 3)`,"Boundary.knots"))
+egfr_rr = cbind.data.frame(
+  egfr = egfr_range,
+  do.call(rbind.data.frame,apply(egfr_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("eGFR",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)})))
+
+# sodium
+sod_spl = ns(sod_range,df=3,
+              knots=attr(mortality_modelF$model$`ns(sodium_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(sodium_at_start, df = 3)`,"Boundary.knots"))
+sod_rr = cbind.data.frame(
+  sodium = sod_range,
+  do.call(rbind.data.frame,apply(sod_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("sodium",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)})))
+
+## albumin
+alb_spl = ns(alb_range,df=3,
+              knots=attr(mortality_modelF$model$`ns(albumin_at_start, df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(albumin_at_start, df = 3)`,"Boundary.knots"))
+alb_rr = cbind.data.frame(
+  albumin = alb_range,
+  do.call(rbind.data.frame,apply(alb_spl,1,function(row) {
+              getHR(mortality_modelF,
+                vars=names(coef(mortality_modelF))[grepl("albumin",names(coef(mortality_modelF)))][1:3],
+                comb=row,
+                cov=mortality_modelF_VCOV)})))
+
+# BNP
+bnp_spl = ns(c(bnp_range,bnp_nt_range),df=3,
+              knots=attr(mortality_modelF$model$`ns(log(BNP_at_start + 1), df = 3)`,"knots"),
+              Boundary.knots=attr(mortality_modelF$model$`ns(log(BNP_at_start + 1), df = 3)`,"Boundary.knots"))
+bnp_rr = cbind.data.frame(
+  bnp_trans = c(bnp_range,bnp_nt_range),
+  bnp_nt_pro = c(rep(0,length(bnp_range)),rep(1,length(bnp_nt_range))),
+  rbind.data.frame(
+    # BNP_NT_Pro=0
+    do.call(rbind.data.frame,apply(bnp_spl[1:length(bnp_range),],1,function(row) {
+                getHR(mortality_modelF,
+                  vars=names(coef(mortality_modelF))[grepl("BNP",names(coef(mortality_modelF))) & !grepl("BNP_NT",names(coef(mortality_modelF)))][1:3],
+                  comb=row,
+                  cov=mortality_modelF_VCOV)})),
+    # BNP_NT_Pro=1
+    do.call(rbind.data.frame,apply(bnp_spl[(length(bnp_range)+1):(length(bnp_range)+length(bnp_nt_range)),],1,function(row) {
+                getHR(mortality_modelF,
+                  vars=names(coef(mortality_modelF))[grepl("BNP",names(coef(mortality_modelF)))][1:7],
+                  # note: subtracting off the BNP_NT_Pro intercept; start at 0 at minimum BNP NT Pro
+                  comb=c(row,1,row)-c(bnp_spl[(length(bnp_range)+1),],1,bnp_spl[(length(bnp_range)+1),]),
+                  cov=mortality_modelF_VCOV)})))) %>%
+  mutate(bnp=exp(bnp_trans)-1)
+
+# plot them all together
+ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)"),
+                 egfr_rr %>% mutate(value=egfr,lab="eGFR"),
+                 bnp_rr %>% mutate(value=bnp_trans,lab=case_when(
+                   bnp_nt_pro==0 ~ "ln(BNP)",T ~ "ln(NT-proBNP)")),
+                 alb_rr %>% mutate(value=albumin,lab="Albumin"),
+                 sod_rr %>% mutate(value=sodium,lab="Sodium"),
+                 api_rr %>% mutate(value=api,lab="APi"),
+                 cpo_rr %>% mutate(value=cpo,lab="CPO"),
+                 lvadyr_rr %>% mutate(value=lvad_years,lab="LVAD years")),
+       aes(x=value,y=hr)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     breaks=2^((-3):6),limits=c(.125/2,8),
+                     oob = scales::rescale_none) +
+  facet_wrap(~lab,scales="free_x",nrow=3) +
+  scale_fill_viridis_d() +
+  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+  labs(x="Lab value",y="Adjusted hazard ratio (95% CI)") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+# ggsave("lab-coefs-by-lvad-NEW.png",width=7.5,height=5,dpi=300)
+
+# now plot the XB (not exponentiated) with no y log scale
+ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)"),
+                 egfr_rr %>% mutate(value=egfr,lab="eGFR"),
+                 bnp_rr %>% mutate(value=bnp_trans,lab=case_when(
+                   bnp_nt_pro==0 ~ "ln(BNP)",T ~ "ln(NT-proBNP)")),
+                 alb_rr %>% mutate(value=albumin,lab="Albumin"),
+                 sod_rr %>% mutate(value=sodium,lab="Sodium"),
+                 api_rr %>% mutate(value=api,lab="APi"),
+                 cpo_rr %>% mutate(value=cpo,lab="CPO"),
+                 lvadyr_rr %>% mutate(value=lvad_years,lab="LVAD years")),# %>%
+         # filter(lab=="Albumin"),
+       aes(x=value,y=log(hr))) +
+  geom_ribbon(aes(ymin = log(lowCI), ymax = log(highCI)),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(#trans='log2',
+                     minor_breaks=NULL,
+                     #breaks=2^((-3):6),
+                     # limits=c(-2.5,0),
+                     oob = scales::rescale_none) +
+  facet_wrap(~lab,scales="free",nrow=3) +
+  scale_x_continuous(oob = scales::rescale_none) +
+  labs(x="Lab value",y="Partial (95% CI)") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+
+## knots for linear splines:
+
+## new:
+# API: 1.45, 6
+# CPO: .8
+# LVAD years: 3, 5
+
+## same as Model E:
+# albumin: 3.5, 4.25
+# eGFR: 40, 90
+# log bili: 0.47
+# log BNP: 5.5, 7
+# log NT-proBNP: 5, 5.5
+# sodium: 137
+
+# refit mortality_modelF with linear splines
+combined_df = combined_df %>%
+  mutate(api_at_start1.45 = ifelse(api_at_start > 1.45, api_at_start - 1.45, 0),
+         api_at_start6 = ifelse(api_at_start > 6, api_at_start - 6, 0),
+         cpo_at_start.8 = ifelse(cpo_at_start > .8, cpo_at_start - .8, 0),
+         lvad_years_at_start3 = ifelse(lvad_years_at_start > 3, lvad_years_at_start - 3, 0),
+         lvad_years_at_start5 = ifelse(lvad_years_at_start > 5, lvad_years_at_start - 5, 0),
+          eGFR_at_start30 = ifelse(eGFR_at_start > 30, eGFR_at_start - 30, 0),
+
+         )
+
+mortality_modelF_linear = glm(
+  outcome ~ 
+    factor(week_from_baseline) + 
+    durable_LVAD_at_start +
+    lvad_years_at_start + lvad_years_at_start3 + lvad_years_at_start5 +
+    iabp_at_start +
+    impella_at_start + 
+    short_mcs_ever_at_start +
+    api_at_start + api_at_start1.45 + api_at_start6 +
+    cpo_at_start + cpo_at_start.8 +
+    diagnosis_at_start +
+    albumin_at_start + albumin_at_start3.5 + albumin_at_start4.25 +
+    eGFR_at_start + eGFR_at_start40 + eGFR_at_start90 +
+    log_bili_at_start + log_bili_at_start.47 +
+    log_BNP_at_start + log_BNP_at_start5.5 + log_BNP_at_start7 +
+    BNP_NT_Pro_at_start +
+    log_BNP_NT_Pro_at_start + log_BNP_NT_Pro_at_start5 + #log_BNP_NT_Pro_at_start5.5 +
+    sodium_at_start + sodium_at_start137,
+  data = combined_df,
+  weights = sweight, family = binomial)
+mortality_modelF_linear
+mortality_modelF_linearVCOV = vcovCL(mortality_modelF_linear, cluster = ~ PX_ID)
+
+# calculate RRs with linear spline model
+
+# 1. Bilirubin (Linear)
+bili_rr_lin = cbind.data.frame(
+  bilirubin_trans = bili_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(bili_range - min(bili_range), 
+                           pmax(bili_range - 0.47, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("log_bili_at_start", "log_bili_at_start.47"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 2. eGFR (Linear)
+egfr_rr_lin = cbind.data.frame(
+  egfr = egfr_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(egfr_range - min(egfr_range), 
+                           pmax(egfr_range - 40, 0), 
+                           pmax(egfr_range - 90, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("eGFR_at_start", "eGFR_at_start40", "eGFR_at_start90"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 3. BNP (Linear - Non-NT subset)
+bnp_rr_lin = cbind.data.frame(
+  bnp_trans = bnp_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(bnp_range - min(bnp_range), 
+                           pmax(bnp_range - 5.5, 0), 
+                           pmax(bnp_range - 7, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("log_BNP_at_start", "log_BNP_at_start5.5", "log_BNP_at_start7"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 4. NT-proBNP (Linear)
+# no intercept for NT-proBNP for this plot; start at 0
+bnp_nt_rr_lin = cbind.data.frame(
+  bnp_nt_trans = bnp_nt_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(bnp_nt_range - min(bnp_nt_range), 
+                           pmax(bnp_nt_range - 5, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("log_BNP_NT_Pro_at_start", 
+                               "log_BNP_NT_Pro_at_start5"),
+                        comb=row,
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 5. Albumin (Linear)
+alb_rr_lin = cbind.data.frame(
+  albumin = alb_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(alb_range - min(alb_range), 
+                           pmax(alb_range - 3.5, 0), 
+                           pmax(alb_range - 4.25, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("albumin_at_start", "albumin_at_start3.5", "albumin_at_start4.25"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 6. Sodium (Linear)
+sod_rr_lin = cbind.data.frame(
+  sodium = sod_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(sod_range - min(sod_range), 
+                           pmax(sod_range - 137, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("sodium_at_start", "sodium_at_start137"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 7. API
+api_rr_lin = cbind.data.frame(
+  api = api_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(api_range - min(api_range), 
+                           pmax(api_range - 1.45, 0),
+                           pmax(api_range - 6, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("api_at_start", "api_at_start1.45","api_at_start6"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 7. CPO
+cpo_rr_lin = cbind.data.frame(
+  cpo = cpo_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(cpo_range - min(cpo_range), 
+                           pmax(cpo_range - .8, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("cpo_at_start", "cpo_at_start.8"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# 8. LVAD years
+lvadyr_rr_lin = cbind.data.frame(
+  lvad_years = lvadyr_range,
+  do.call(rbind.data.frame,
+          apply(data.frame(lvadyr_range - min(lvadyr_range), 
+                           pmax(lvadyr_range - 3, 0),
+                           pmax(lvadyr_range - 5, 0)), 1, function(row) {
+                  getHR(mortality_modelF_linear,
+                        vars=c("lvad_years_at_start", "lvad_years_at_start3", "lvad_years_at_start5"),
+                        comb=as.numeric(row),
+                        cov=mortality_modelF_linearVCOV)}))
+)
+
+# plot them all together
+min_limits <- data.frame(
+  lab = c("ln(Bilirubin)", "eGFR", "ln(BNP)", "ln(NT-proBNP)", 
+          "Albumin", "Sodium", "APi", "CPO", "LVAD years"),
+  ymin = 0.5,
+  ymax = 2.0,
+  model="Linear"
+)
+ggplot(bind_rows(bili_rr %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)",model="Cubic"),
+                 bili_rr_lin %>% mutate(value=bilirubin_trans,lab="ln(Bilirubin)",model="Linear"),
+                 egfr_rr %>% mutate(value=egfr,lab="eGFR",model="Cubic"),
+                 egfr_rr_lin %>% mutate(value=egfr,lab="eGFR",model="Linear"),
+                 bnp_rr %>% mutate(value=bnp_trans,lab=case_when(
+                   bnp_nt_pro==0 ~ "ln(BNP)",T ~ "ln(NT-proBNP)"),model="Cubic"),
+                 bnp_rr_lin %>% mutate(value=bnp_trans,lab="ln(BNP)",model="Linear"),
+                 bnp_nt_rr_lin %>% mutate(value=bnp_nt_trans,lab="ln(NT-proBNP)",model="Linear"),
+                 alb_rr %>% mutate(value=albumin,lab="Albumin",model="Cubic"),
+                 alb_rr_lin %>% mutate(value=albumin,lab="Albumin",model="Linear"),
+                 sod_rr %>% mutate(value=sodium,lab="Sodium",model="Cubic"),
+                 sod_rr_lin %>% mutate(value=sodium,lab="Sodium",model="Linear"),
+                 api_rr %>% mutate(value=api,lab="APi",model="Cubic"),
+                 api_rr_lin %>% mutate(value=api,lab="APi",model="Linear"),
+                 cpo_rr %>% mutate(value=cpo,lab="CPO",model="Cubic"),
+                 cpo_rr_lin %>% mutate(value=cpo,lab="CPO",model="Linear"),
+                 lvadyr_rr %>% mutate(value=lvad_years,lab="LVAD years",model="Cubic"),
+                 lvadyr_rr_lin %>% mutate(value=lvad_years,lab="LVAD years",model="Linear")),
+       aes(x=value,y=hr, linetype=model, fill=model)) +
+  geom_ribbon(aes(ymin = lowCI, ymax = highCI),alpha=.5) +
+  geom_line(color="black",linewidth=.75) +
+  geom_blank(data = min_limits, aes(x = Inf, y = ymin)) +
+  geom_blank(data = min_limits, aes(x = -Inf, y = ymax)) +
+  geom_hline(yintercept=1,linetype=2) +
+  scale_y_continuous(trans='log2',minor_breaks=NULL,
+                     breaks=2^((-3):6),
+                     #limits=c(.125,8),
+                     oob = scales::rescale_none) +
+  facet_wrap(~lab,scales="free",nrow=3) +
+  scale_fill_viridis_d() + # direction=-1
+  # scale_x_continuous(breaks=seq(0,1,.2),limits=c(0,1),oob = scales::rescale_none) +
+  labs(x="Covariate value",y="Adjusted hazard ratio (95% CI)",
+       fill="Spline",linetype="Spline") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+ggsave("lab-coefs-by-splinetype-ModF.png",width=8,height=7,dpi=300)
+
+# save mortality_modelF_linear
+save(mortality_modelF_linear,file="mortality-modelF-linear.Rdata")
+
+```
+
 
 ## Save final model and calculate robust standard errors
 After all comparisons in validation and test data, Model C and E have similar performance, but Model C may be preferable for its parsimony. Let's print out those coefficients and robust standard errors.
