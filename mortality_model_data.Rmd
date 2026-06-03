@@ -399,7 +399,7 @@ label(table_data$impella) = "Current Impella"
 table_data$iabp = factor(table_data$iabp,labels=c("No","Yes"))
 label(table_data$iabp) = "Current IABP"
 table_data$short_MCS_ever = factor(table_data$short_MCS_ever,labels=c("No","Yes"))
-label(table_data$short_MCS_ever) = "Ever on short-term MCS"
+label(table_data$short_MCS_ever) = "Ever on advanced MCS"
 table_data$out_of_range_flag = factor(table_data$out_of_range_flag,labels=c("No","Yes"))
 label(table_data$out_of_range_flag) = "Any data out of range"
 table1(~ status_label + short_MCS_ever + impella + iabp + durable_LVAD + albumin + bilirubin + creatinine + BNP + sodium + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + out_of_range_flag | train_test_split_label, data=table_data,overall=F)
@@ -2441,13 +2441,13 @@ summary(pred_data$uscrs2) # 1-50
 pred_data %>% count(short_MCS_ever,impella,iabp,durable_LVAD)
 pred_data = pred_data %>%
   mutate(max_device = case_when(
-    short_MCS_ever == 1 ~ "Short-term MCS",
-    impella == 1 ~ "Impella",
+    short_MCS_ever == 1 ~ "Advanced MCS",
+    impella == 1 ~ "MFP",
     iabp == 1 ~ "IABP",
     durable_LVAD == 1 ~ "LVAD",
     T ~ "None of the\nabove"
   ),
-  max_device = factor(max_device,levels=c("Short-term MCS","Impella","IABP","LVAD","None of the\nabove")))
+  max_device = factor(max_device,levels=c("Advanced MCS","MFP","IABP","LVAD","None of the\nabove")))
 
 # make figure: histogram of uscrs2 by status; fill by max_device
 set.seed(1992)
