@@ -365,7 +365,7 @@ calibdat = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modC")
 calibdatF = makeCalibData(eight_sets_test_long,10,"prob_outcome_6wk_modF")
 
 library(ggforce)
-# ggplot(calibdatE,aes(x=exp,y=obs)) +
+# ggplot(calibdatF,aes(x=exp,y=obs)) +
 ggplot(calibdat,aes(x=exp,y=obs)) +
   # geom_smooth(method = "lm", se = FALSE, linetype="dashed", fullrange=T,
   #             linewidth=.5,alpha=.75) +
@@ -502,11 +502,11 @@ calib_diag_long = calib_diag_long %>%
     diag %in% "Amyloid" ~ "Amyloid",
     diag %in% "Dilated_CM" ~ "Dilated",
     diag %in% "Hypertrophic" ~ "Hypertrophic",
-    diag %in% "Restricted" ~ "Restricted",
+    diag %in% "Restricted" ~ "Restrictive",
     diag %in% "Re-Transplant" ~ "Retransplant",
     T ~ diag
   ),
-  diag_label = factor(diag_label,levels=c("Amyloid","Congenital","Dilated","Hypertrophic","Ischemic","Retransplant","Restricted","Valvular","Other")))
+  diag_label = factor(diag_label,levels=c("Amyloid","Congenital","Dilated","Hypertrophic","Ischemic","Retransplant","Restrictive","Valvular","Other")))
 ggplot(calib_diag_long,
        aes(x = diag_label, 
            y = value, fill = type_fact)) +

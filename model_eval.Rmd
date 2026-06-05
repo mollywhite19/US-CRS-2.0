@@ -451,6 +451,12 @@ ggsave("uscrs_auc_comparison-test.png", width = 7, height = 4, dpi = 300)
 auc_df %>% filter(model!="uscrs 1.0") %>%
   arrange(model,AUC) %>% group_by(model) %>% slice(1,n())
 
+# mean AUC for 6-status
+auc_df %>% filter(model %in% "status only") %>% pull(AUC) %>% mean # .693
+auc_df %>% filter(model %in% "waiting time + status") %>% pull(AUC) %>% mean # .680
+auc_df %>% filter(model %in% "uscrs 2.0 simple") %>% pull(AUC) %>% mean
+auc_df %>% filter(model %in% "uscrs 2.0 complex") %>% pull(AUC) %>% mean
+
 # look for significant differences in AUC
 pval_df %>% filter(p<0.05,model!="uscrs 1.0",reference!="uscrs 1.0")
 pval_df %>% filter(model=="uscrs 2.0 simple" | reference=="uscrs 2.0 simple",
