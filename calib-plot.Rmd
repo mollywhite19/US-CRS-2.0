@@ -470,6 +470,8 @@ ggplot(calib_status_excep_long,
   labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
 ggsave("calib-by-excep-test.png",width=9.5,height=6.5)
+
+calib_status_excep_long
 ```
 
 ## Calibration by diagnosis
@@ -522,4 +524,62 @@ ggplot(calib_diag_long,
   labs(x = "Diagnosis", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
 ggsave("calib-by-diag-test.png",width=11,height=6.5)
+```
+
+```{r excepplot (nonoverlap)}
+# MOLLY ADDED - recreate figure 2 after removing overlapped candidates (only retain test candidates who don't appear in training)
+base::load("mortality_model_train_data.Rdata")
+train_px_ids = combined_df %>%
+  pull(PX_ID) %>%
+  unique()
+
+eight_sets_test_non_overlap = eight_sets_test_long %>%
+  filter(!(PX_ID %in% train_px_ids))
+
+# get overall observed and expected by status and exception
+levels = eight_sets_test_non_overlap %>% count(status_at_start,excep_at_start)
+calib_status_excepC = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(eight_sets_test_non_overlap %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modC") %>%
+      mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status_excepC = do.call(rbind.data.frame,calib_status_excepC)
+calib_status_excepF = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(eight_sets_test_non_overlap %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modF") %>%
+      mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status_excepF = do.call(rbind.data.frame,calib_status_excepF)
+
+# make bar plot by status
+calib_status_excep = inner_join(calib_status_excepC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
+                          calib_status_excepF %>% rename(expF.value=exp,expF.lower=exp.25,expF.upper=exp.75)) %>%
+  rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
+calib_status_excep
+calib_status_excep_long = calib_status_excep %>%
+  pivot_longer(cols = matches("expC|expF|obs"), names_to = c("type",".value"),
+               names_sep = "\\.") %>%
+  mutate(type_fact = factor(type,levels=c("expC","expF","obs"),
+                            labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
+                                     "Predicted\nUS-CRS 2.0 -\nComplex",
+                                     "Observed")))
+ggplot(calib_status_excep_long,
+       aes(x = factor(paste(status,exception,sep=".")), y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.9),
+    width = 0.2
+  ) +
+  coord_cartesian(ylim=c(0,.5)) +
+  # scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  scale_fill_viridis_d() +
+  labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
+ggsave("calib-by-excep-non-overlap.png",width=9.5,height=6.5)
+
 ```

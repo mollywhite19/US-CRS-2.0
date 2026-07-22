@@ -109,6 +109,34 @@ thor_support_device =
     read_sas(here::here(curr_data_release, "ThorSupportDevice.sas7bdat"), NULL) %>% 
     zap_formats() %>% zap_labels()
 
+# MOLLY ADDED - data loading
+# just_form_hr = read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHR.sas7bdat") %>%  
+#     zap_formats() %>% zap_labels()
+# just_form_hr_data_link = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRDataLink.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# risk_strat_data_hr = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/RiskStratDataHR.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# status_just_episode = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/StatusJustEpisode.sas7bdat") %>%
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat1 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat1.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat2 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat2.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat3 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat3.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat4 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat4.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# thor_support_device = 
+#     read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/ThorSupportDevice.sas7bdat") %>% 
+#     zap_formats() %>% zap_labels()
+
 # join everything
 justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
                      just_form_hr_data_link %>% select(WlregAuditId,JustId),
@@ -235,6 +263,9 @@ table(df_final$diagnosis,useNA="ifany")
 curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor"
 df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand.sas7bdat'),
                                   col_select=c(PX_ID, CAN_DGN, CAN_DGN2))
+# MOLLY ADDED - read in SAF
+# df_cand_thor <- haven::read_sas("C:/Users/mwhite10/Downloads/pubsaf2603/cand_thor.sas7bdat",
+#                                   col_select=c(PX_ID, CAN_DGN, CAN_DGN2))
 df_final = left_join(df_final,df_cand_thor,by="PX_ID")
 
 # look at CAN_DGN for each diagnosis
@@ -442,8 +473,9 @@ The model with US-CRS 1.0 variables + status + hemodynamics had the best covaria
 
 ## Compare denominator models
 ```{r}
-rerun=F
+rerun=T
 
+# MOLLY ADDED rerun must be true for the weight specification forest plot for model C
 if (rerun) {
 
 ## fit candidate models for denominator of IPW ##
@@ -561,8 +593,12 @@ summary(train_data$fit_prob_status)
 summary(train_data$fit_prob_hemo)
 
 # with chosen model, set probability of not receiving a transplant each week
+# MOLLY ADDED - alternative weight specifications for R&R
 train_data = train_data %>%
-  mutate(prob_no_tx = 1 - fit_prob_hemo)
+  mutate(prob_no_tx = 1 - fit_prob_hemo,
+         prob_no_tx_simple = 1 - fit_prob_simple, 
+         prob_no_tx_status = 1- fit_prob_status,
+         prob_no_tx_waitlist = 1- fit_prob_waitlist)
 
 # clean up
 rm(df_weights_hemo,df_weights_simple,df_weights_status,df_weights_waitlist,
@@ -761,6 +797,14 @@ train_data = train_data %>%
   group_by(PX_ID) %>%
   mutate(delisting2 = cumsum(delisting),
          prob_no_tx = ifelse(delisting2>1,1,prob_no_tx))
+
+# MOLLY ADDED - alternative weight specification probability adjustments
+train_data = train_data %>%
+  mutate(prob_no_tx_simple = ifelse(delisting2>1,1,prob_no_tx_simple),
+         prob_no_tx_status = ifelse(delisting2>1,1,prob_no_tx_status),
+         prob_no_tx_waitlist = ifelse(delisting2>1,1,prob_no_tx_waitlist))
+
+
 table(train_data$transplant,train_data$delisting) # quick check
 ```
 
@@ -855,10 +899,15 @@ with(combined_df,table(prob_no_tx==1,prob_no_tx_start==1))
 
 # Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
 combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
-  sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+  sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx)),
+  # MOLLY ADDED additional sweights based on other fit_prob specifications
+  sweight_simple = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx_simple)),
+  sweight_status = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx_status)),
+  sweight_waitlist = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx_waitlist))
 ) %>% ungroup
 
-
+combined_df %>%
+  select(sweight, sweight_simple, sweight_status, sweight_waitlist)
 ```
 
 ## Overall distribution of weights
@@ -2888,5 +2937,147 @@ ggplot(pred_data1 %>%
   labs(fill="Exception",x="US-CRS 2.0 score",y="Number of candidates") +
   theme(text=element_text(size=12))
 ggsave("uscrs-by-status-exception.png",width=7.5,height=5,dpi=300) # Figure 3
+```
+
+# Weight formulation comparisons Model C
+
+```{r}
+# MOLLY ADDED compare weight approaches for Model C
+modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
+
+
+mortality_c_sweights = glm(modelc_form, data = combined_df, weights = sweight, family = binomial)
+mortality_c_sweights_VCOV = vcovCL(mortality_c_sweights, cluster = ~ PX_ID)
+
+mortality_c_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_sweights,vars=var_interest,cov=mortality_c_sweights_VCOV))
+}))
+
+mortality_c_sweights_simple = glm(modelc_form, data = combined_df, weights = sweight_simple, family = binomial)
+mortality_c_sweights_simple_VCOV = vcovCL(mortality_c_sweights_simple, cluster = ~ PX_ID)
+
+mortality_c_sweights_simple_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights_simple)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_sweights_simple,vars=var_interest,cov=mortality_c_sweights_simple_VCOV))
+}))
+
+mortality_c_sweights_status = glm(modelc_form, data = combined_df, weights = sweight_status, family = binomial)
+mortality_c_sweights_status_VCOV = vcovCL(mortality_c_sweights_status, cluster = ~ PX_ID)
+
+mortality_c_sweights_status_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights_status)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_sweights_status,vars=var_interest,cov=mortality_c_sweights_status_VCOV))
+}))
+
+mortality_c_sweights_waitlist = glm(modelc_form, data = combined_df, weights = sweight_waitlist, family = binomial)
+mortality_c_sweights_waitlist_VCOV = vcovCL(mortality_c_sweights_waitlist, cluster = ~ PX_ID)
+
+mortality_c_sweights_waitlist_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights_waitlist)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_sweights_waitlist,vars=var_interest,cov=mortality_c_sweights_waitlist_VCOV))
+}))
+
+mortality_c_sweights_sum
+```
+
+```{r}
+
+
+
+
+new_names <- c("albumin_at_start" = "Albumin", "short_mcs_ever_at_start" = "Short-term MCS", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "log(BNP_at_start + 1)" = "Log BNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "impella_at_start" = "Impella", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "sodium_at_start" = "Sodium", "iabp_at_start" = "IABP")
+term_order <- c("Albumin","Log Bilirubin","eGFR", "Log BNP", "BNP NT Pro", "Log BNP * BNP NT Pro", "Sodium", "Durable LVAD", "Short-term MCS", "Impella", "IABP")
+
+# compare unweighted and weighted
+plotdat = bind_rows(mortality_c_sweights_sum %>% mutate(model="Hemodynamics Weights"),
+          mortality_c_sweights_simple_sum %>% mutate(model="Simple Weights"),
+          mortality_c_sweights_status_sum %>% mutate(model="Status Weights"), 
+          mortality_c_sweights_waitlist_sum %>% mutate(model="Waitlist Weights")) %>%
+  mutate(
+         var = recode(var, !!!new_names),
+         var = factor(var,levels=term_order),
+         model = factor(model,levels=c("Hemodynamics Weights", "Simple Weights","Status Weights", "Waitlist Weights")))
+
+ggplot(plotdat %>% filter(var!="(Intercept)"),
+       aes(x = log(hr), y = var, color = model, linetype=model)) +
+  geom_point(position = position_dodge(width = 0.5),size=1) +
+  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5),linewidth=.4) +
+  labs(x = "Coefficient Estimate", y = "Term", color="Model",linetype="Model") +
+  geom_vline(xintercept=0) +
+  scale_color_viridis_d() +
+  ## zoom in:
+  # coord_cartesian(xlim=c(-.25,.25)) +
+  theme_bw() +
+  theme(text=element_text(size=12)) +
+  guides(color = guide_legend(reverse = TRUE),
+         linetype = guide_legend(reverse = TRUE))
+# in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
+ggsave("wts-compare-modc-specs.png",width=9,height=5)
+
+```
+
+
+
+# Weight comparison Model C
+
+```{r}
+# MOLLY ADDED compare weight approaches for Model C (unweighted, stabilized, truncated)
+modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
+
+mortality_c_no_weights = glm(modelc_form, data = combined_df, family = binomial)
+mortality_c_no_weights_VCOV = vcovCL(mortality_c_no_weights, cluster = ~ PX_ID)
+
+mortality_c_no_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_no_weights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_no_weights,vars=var_interest,cov=mortality_c_no_weights_VCOV))
+}))
+
+mortality_c_sweights = glm(modelc_form, data = combined_df, weights = sweight, family = binomial)
+mortality_c_sweights_VCOV = vcovCL(mortality_c_sweights, cluster = ~ PX_ID)
+
+mortality_c_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_sweights,vars=var_interest,cov=mortality_c_sweights_VCOV))
+}))
+
+
+mortality_c_tweights = glm(modelc_form, data = combined_df, weights = tweight, family = binomial)
+mortality_c_tweights_VCOV = vcovCL(mortality_c_tweights, cluster = ~ PX_ID)
+
+mortality_c_tweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_tweights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_tweights,vars=var_interest,cov=mortality_c_tweights_VCOV))
+}))
+```
+
+```{r}
+modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
+mortality_c_unweight = glm(modelc_form, data = combined_df,family = binomial)
+mortality_c_sweights = glm(modelc_form, data = combined_df, weights = sweight, family = binomial)
+
+
+
+new_names <- c("albumin_at_start" = "Albumin", "short_mcs_ever_at_start" = "Short-term MCS", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "log(BNP_at_start + 1)" = "Log BNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "impella_at_start" = "Impella", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "sodium_at_start" = "Sodium", "iabp_at_start" = "IABP")
+term_order <- c("Albumin","Log Bilirubin","eGFR", "Log BNP", "BNP NT Pro", "Log BNP * BNP NT Pro", "Sodium", "Durable LVAD", "Short-term MCS", "Impella", "IABP")
+
+# compare unweighted and weighted
+plotdat = bind_rows(mortality_c_no_weights_sum %>% mutate(model="Unweighted"),
+          mortality_c_sweights_sum %>% mutate(model="Stabilized Weights"),
+          mortality_c_tweights_sum %>% mutate(model="Stabilized + Truncated\nWeights")) %>%
+  mutate(
+         var = recode(var, !!!new_names),
+         var = factor(var,levels=term_order),
+         model = factor(model,levels=c("Unweighted", "Stabilized Weights","Stabilized + Truncated\nWeights")))
+
+ggplot(plotdat %>% filter(var!="(Intercept)"),
+       aes(x = log(hr), y = var, color = model, linetype=model)) +
+  geom_point(position = position_dodge(width = 0.5),size=1) +
+  geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5),linewidth=.4) +
+  labs(x = "Coefficient Estimate", y = "Term", color="Model",linetype="Model") +
+  geom_vline(xintercept=0) +
+  scale_color_viridis_d() +
+  ## zoom in:
+  # coord_cartesian(xlim=c(-.25,.25)) +
+  theme_bw() +
+  theme(text=element_text(size=12)) +
+  guides(color = guide_legend(reverse = TRUE),
+         linetype = guide_legend(reverse = TRUE))
+# in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
+ggsave("wts-compare-modc.png",width=9,height=5)
+
 ```
 

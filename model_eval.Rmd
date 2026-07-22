@@ -8,8 +8,7 @@ editor_options:
 
 ```{r setup, include=FALSE}
 rm(list = ls())
-# load("C:/Users/mhwhi/Downloads/mortality-model.RData")
-# load("C:/Users/mhwhi/Downloads/mortality_model_test_data.RData")
+
 # Grace
 base::load("mortality-model-options.Rdata")
 base::load("mortality-model-lasso-options.Rdata")
@@ -287,26 +286,26 @@ Try out all of the potential models (models A-G) in validation data (`eight_sets
 ```{r}
 # load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
 base::load("mort-pred-fun.Rdata")
-
-# apply to eight_sets_valid
-eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
-eight_sets_valid_modB = pred_data_fun(eight_sets_valid,mortality_modelB)
-eight_sets_valid_modC = pred_data_fun(eight_sets_valid,mortality_modelC)
-eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
-eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
-eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
-eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
-eight_sets_valid_modH = pred_data_fun(eight_sets_valid,mortality_modelH,lasso=T)
-
-# new variables created by pred_data_fun
-names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
-
-# save results
-save(eight_sets_valid_modA,eight_sets_valid_modB,
-     eight_sets_valid_modC,eight_sets_valid_modD,
-     eight_sets_valid_modE,eight_sets_valid_modF,
-     eight_sets_valid_modG,eight_sets_valid_modH,
-     file="eight-sets-valid.Rdata")
+# 
+# # apply to eight_sets_valid
+# eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
+# eight_sets_valid_modB = pred_data_fun(eight_sets_valid,mortality_modelB)
+# eight_sets_valid_modC = pred_data_fun(eight_sets_valid,mortality_modelC)
+# eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
+# eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
+# eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
+# eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
+# eight_sets_valid_modH = pred_data_fun(eight_sets_valid,mortality_modelH,lasso=T)
+# 
+# # new variables created by pred_data_fun
+# names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
+# 
+# # save results
+# save(eight_sets_valid_modA,eight_sets_valid_modB,
+#      eight_sets_valid_modC,eight_sets_valid_modD,
+#      eight_sets_valid_modE,eight_sets_valid_modF,
+#      eight_sets_valid_modG,eight_sets_valid_modH,
+#      file="eight-sets-valid.Rdata")
 
 # apply to eight_sets_test
 eight_sets_test_modC = pred_data_fun(eight_sets_test,mortality_modelC)
@@ -340,17 +339,32 @@ getMeanAUC = function(moddata) {
   })
   return(mean(auc_results))
 }
-getMeanAUC(eight_sets_valid_modA)
-getMeanAUC(eight_sets_valid_modB)
-getMeanAUC(eight_sets_valid_modC)
-getMeanAUC(eight_sets_valid_modD)
-getMeanAUC(eight_sets_valid_modE)
-getMeanAUC(eight_sets_valid_modF)
-getMeanAUC(eight_sets_valid_modG)
-getMeanAUC(eight_sets_valid_modH)
+# getMeanAUC(eight_sets_valid_modA)
+# getMeanAUC(eight_sets_valid_modB)
+# getMeanAUC(eight_sets_valid_modC)
+# getMeanAUC(eight_sets_valid_modD)
+# getMeanAUC(eight_sets_valid_modE)
+# getMeanAUC(eight_sets_valid_modF)
+# getMeanAUC(eight_sets_valid_modG)
+# getMeanAUC(eight_sets_valid_modH)
 getMeanAUC(eight_sets_test_modC) # .807
 getMeanAUC(eight_sets_test_modE) # .798
 getMeanAUC(eight_sets_test_modF) # .795
+
+eight_sets_test_modC = eight_sets_test_modC %>%
+  filter(!is.na(prob_surv_6wk))
+eight_sets_test_modE = eight_sets_test_modE%>%
+  filter(!is.na(prob_surv_6wk))
+eight_sets_test_modF = eight_sets_test_modF %>%
+  filter(!is.na(prob_surv_6wk))
+
+test_data %>%
+  filter(is.na(CAN_GENDER)) %>%
+  pull(PX_ID)
+
+eight_sets_test_modC %>%
+  filter(is.na(prob_surv_6wk))
+
 ```
 
 # Calculate AUC in each interval of test set
@@ -485,6 +499,8 @@ ggplot(roc_df,
         legend.key.spacing.y = unit(.5, "lines")) +
   ylim(c(0,1))
 ggsave("uscrs_roc_comparison-test.png", width = 7, height = 4, dpi = 300)
+
+
 ```
 
 <!-- # Calibration -->
@@ -808,4 +824,222 @@ ggsave("uscrs_roc_comparison-test.png", width = 7, height = 4, dpi = 300)
 # 
 # ggsave("uscrs_forest_ro1.png", width = 12, height = 7)
 ```
+
+```{r nonoverlap fig 1}
+# MOLLY ADDED - recreate figure 1 after removing overlapped patients (only retain test set candidates that don't appear in training)
+# create one test set with both model predictions
+base::load("mortality_model_train_data.Rdata")
+train_px_ids = combined_df %>%
+  pull(PX_ID) %>%
+  unique()
+eight_sets_non_overlap = eight_sets_test_mod %>%
+  filter(!(PX_ID %in% train_px_ids))
+
+
+# initialize lists
+auc_results <- list()
+p_val <- list()
+roc_plot <- list()
+
+# Loop through datasets to compute AUC
+for (i in 1:length(test_dates)) {
+  data_i <- eight_sets_non_overlap %>% filter(int==i)
+  auc_tmp <- Score(
+    list("uscrs 2.0 simple" = data_i$prob_outcome_6wk_modC, "uscrs 2.0 complex" = data_i$prob_outcome_6wk_modF, "waiting time + status" = data_i$rank, "status only" = data_i$status_flipped, "uscrs 1.0" = data_i$uscrs),
+    formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
+              eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+              durable_LVAD + short_MCS_ever + status,
+    data = data_i %>% 
+              mutate(time = ifelse(outcome == 0, time + 0.001, time)),
+    cens.method = "ipcw", cens.model = "cox",
+    conf.int = TRUE,
+    times = 42,
+    metrics = c("auc"),
+    conservative = TRUE,
+    plots = "roc"
+  )
+  roc_plot[[i]] <- auc_tmp$ROC$plotframe %>% mutate(Date=test_dates[i])
+  p_val[[i]] <- auc_tmp$AUC$contrasts
+  auc_results[[i]] <- auc_tmp$AUC$score %>%
+    mutate(interval = paste0("Interval_", i))  # Add dataset identifier
+}
+pval_df <- do.call(rbind.data.frame,p_val)
+auc_df <- bind_rows(auc_results) %>%
+  mutate(Model=factor(model,levels=c("status only","waiting time + status","uscrs 2.0 simple","uscrs 2.0 complex","uscrs 1.0"),labels=c("Status (1-6)","Status (1-6) +\nWaiting Time","US-CRS 2.0 -\nSimple","US-CRS 2.0 -\nComplex","US-CRS 1.0")))
+roc_df <- do.call(rbind.data.frame,roc_plot)
+
+# add dates
+auc_df$Date <- rep(test_dates, each = dim(table(auc_df$Model)))
+pval_df$Date <- rep(test_dates, each = choose(dim(table(auc_df$Model)),2))
+
+# plot results
+ggplot(auc_df %>% filter(model!="uscrs 1.0"), 
+       aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
+  geom_line(position = position_dodge(width = 24),alpha=.85) +
+  geom_point(position = position_dodge(width = 24),size=2.5) +
+  geom_errorbar(position = position_dodge(width = 24),width=15,alpha=.85) +
+  labs(
+    #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
+    x = "Cross-section start date",
+    y = "Time-dependent AUC (6-week mortality)"
+  ) +
+  theme_bw() +
+  theme(
+    panel.background = element_rect(fill = "white", color = "white"),
+    plot.background = element_rect(fill = "white", color = NA), 
+    
+    # Increase font sizes
+    # plot.title = element_text(size = 18),
+    # axis.title.x = element_text(size = 16), 
+    # axis.title.y = element_text(size = 16),
+    
+    # axis.text = element_text(size = 10),
+    # legend.title = element_text(size = 14),
+    # legend.text = element_text(size = 11),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    
+    text=element_text(size=12),
+    legend.key.spacing.y = unit(.5, "lines")
+  ) +
+  scale_y_continuous(limits = c(0,1)) +
+  scale_x_continuous(
+    breaks = as.numeric(test_dates),
+    labels = format(test_dates, "%m/%d/%Y"),
+    minor_breaks=F
+  ) +
+  scale_shape_manual(values=c(16,17,15,12)) +
+  scale_color_viridis_d(direction=-1)
+  # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
+  # scale_linetype_manual(values = c("dashed","solid","solid"))
+ggsave("uscrs_auc_comparison_non_overlap.png", width = 7, height = 4, dpi = 300)
+
+```
+
+```{r}
+# MOLLY ADDED - convert US-CRS (mod C) to 50-point and 6-status
+base::load("mrdat.Rdata") # from match-run-data.R
+
+for(mod in c("modC")) { # , "modE"
+  log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
+
+  # Exponentiate to get hazard
+  haz <- exp(log_haz_col)
+
+  # Cap at 99th percentile
+  haz_99 <- quantile(haz, 0.99)
+  haz_capped <- pmin(haz, haz_99)
+
+  # Convert to log odds
+  log_odds <- log(haz_capped / (1 - haz_capped))
+
+  # Scale to 1-50
+  min_log_odds <- min(log_odds)
+  max_log_odds <- max(log_odds)
+}
+rm(log_haz_col,haz,haz_capped,log_odds)
+
+eight_sets_test_mod = eight_sets_test_mod %>%
+  mutate(haz_dth_modC = pmin(haz_dth_modC,haz_99),
+         log_odds = log(haz_dth_modC / (1 - haz_dth_modC)),
+         uscrs2 = round(1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds)))
+
+eight_sets_test_mod = eight_sets_test_mod %>%
+  mutate(uscrs_6_status = case_when(
+    uscrs2 == 50 ~ 1,
+    uscrs2 >= 45 & uscrs2 < 50 ~ 2,
+    uscrs2 >= 40 & uscrs2 < 45 ~ 3,
+    uscrs2 >= 30 & uscrs2 < 40 ~ 4,
+    uscrs2 >= 20 & uscrs < 29 ~ 5,
+    TRUE ~ 6
+  )) %>%
+  mutate(uscrs_6_flipped = 1/uscrs_6_status)
+
+
+```
+
+```{r}
+# MOLLY ADDED - recreate figure 1 using status compared to 50-point and 6-status US-CRS
+
+# initialize lists
+auc_results <- list()
+p_val <- list()
+roc_plot <- list()
+
+# Loop through datasets to compute AUC
+for (i in 1:length(test_dates)) {
+  data_i <- eight_sets_test_mod %>% filter(int==i)
+  auc_tmp <- Score(
+    list("uscrs 2.0 50-point" = data_i$uscrs2, "uscrs 2.0 6-status" = data_i$uscrs_6_flipped, "status only" = data_i$status_flipped),
+    formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
+              eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
+              durable_LVAD + short_MCS_ever + status,
+    data = data_i %>% 
+              mutate(time = ifelse(outcome == 0, time + 0.001, time)),
+    cens.method = "ipcw", cens.model = "cox",
+    conf.int = TRUE,
+    times = 42,
+    metrics = c("auc"),
+    conservative = TRUE,
+    plots = "roc"
+  )
+  roc_plot[[i]] <- auc_tmp$ROC$plotframe %>% mutate(Date=test_dates[i])
+  p_val[[i]] <- auc_tmp$AUC$contrasts
+  auc_results[[i]] <- auc_tmp$AUC$score %>%
+    mutate(interval = paste0("Interval_", i))  # Add dataset identifier
+}
+pval_df <- do.call(rbind.data.frame,p_val)
+auc_df <- bind_rows(auc_results) %>%
+  mutate(Model=factor(model,levels=c("status only","uscrs 2.0 50-point","uscrs 2.0 6-status",labels=c("Status (1-6)","US-CRS 50-point","US-CRS 2.0 6-status"))))
+roc_df <- do.call(rbind.data.frame,roc_plot)
+
+# add dates
+auc_results
+auc_df <- auc_df %>%
+  mutate(model = droplevels(model))
+auc_df <- auc_df %>%
+  mutate(Model = droplevels(Model))
+auc_df$Date <- rep(test_dates, each = dim(table(auc_df$Model)))
+pval_df$Date <- rep(test_dates, each = choose(dim(table(auc_df$Model)),2))
+
+# plot results
+ggplot(auc_df %>% filter(model!="uscrs 1.0"), 
+       aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
+  geom_line(position = position_dodge(width = 24),alpha=.85) +
+  geom_point(position = position_dodge(width = 24),size=2.5) +
+  geom_errorbar(position = position_dodge(width = 24),width=15,alpha=.85) +
+  labs(
+    #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
+    x = "Cross-section start date",
+    y = "Time-dependent AUC (6-week mortality)"
+  ) +
+  theme_bw() +
+  theme(
+    panel.background = element_rect(fill = "white", color = "white"),
+    plot.background = element_rect(fill = "white", color = NA), 
+    
+    # Increase font sizes
+    # plot.title = element_text(size = 18),
+    # axis.title.x = element_text(size = 16), 
+    # axis.title.y = element_text(size = 16),
+    
+    # axis.text = element_text(size = 10),
+    # legend.title = element_text(size = 14),
+    # legend.text = element_text(size = 11),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    
+    text=element_text(size=12),
+    legend.key.spacing.y = unit(.5, "lines")
+  ) +
+  scale_y_continuous(limits = c(0,1)) +
+  scale_x_continuous(
+    breaks = as.numeric(test_dates),
+    labels = format(test_dates, "%m/%d/%Y"),
+    minor_breaks=F
+  ) +
+  scale_shape_manual(values=c(16,17,15,12)) +
+  scale_color_viridis_d(direction=-1)
+  # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
+  # scale_linetype_manual(values = c("dashed","solid","solid"))
+```
+
 
