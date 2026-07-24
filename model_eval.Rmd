@@ -913,6 +913,11 @@ ggplot(auc_df %>% filter(model!="uscrs 1.0"),
   # scale_linetype_manual(values = c("dashed","solid","solid"))
 ggsave("uscrs_auc_comparison_non_overlap.png", width = 7, height = 4, dpi = 300)
 
+## look at significant differences
+pval_df %>% filter(model=="uscrs 2.0 simple" | reference=="uscrs 2.0 simple",
+                   model!="uscrs 1.0",reference!="uscrs 1.0") %>%
+  select(model,reference,delta.AUC,p,Date) %>%
+  mutate(signif=p<0.05) %>% arrange(desc(signif))
 ```
 
 ```{r}
