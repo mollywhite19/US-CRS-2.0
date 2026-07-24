@@ -954,7 +954,13 @@ eight_sets_test_mod = eight_sets_test_mod %>%
   )) %>%
   mutate(uscrs_6_flipped = 1/uscrs_6_status)
 
-
+# break ties within 6-Status US-CRS by 50-point US-CRS
+eight_sets_test_mod = eight_sets_test_mod %>%
+  arrange(uscrs_6_status,desc(uscrs2)) %>% 
+  mutate(uscrs_6_rank = row_number()) %>% 
+  group_by(uscrs_6_status, uscrs2) %>%
+  mutate(uscrs_6_rank = first(uscrs_6_rank)) %>% ungroup %>%
+  mutate(uscrs_6_rank = 1/uscrs_6_rank)
 ```
 
 ```{r}
@@ -963,13 +969,12 @@ eight_sets_test_mod = eight_sets_test_mod %>%
 # initialize lists
 auc_results <- list()
 p_val <- list()
-roc_plot <- list()
 
 # Loop through datasets to compute AUC
 for (i in 1:length(test_dates)) {
   data_i <- eight_sets_test_mod %>% filter(int==i)
   auc_tmp <- Score(
-    list("uscrs 2.0 50-point" = data_i$uscrs2, "uscrs 2.0 6-status" = data_i$uscrs_6_flipped, "status only" = data_i$status_flipped),
+    list("uscrs 2.0 simple" = data_i$prob_outcome_6wk_modC, "uscrs 2.0 50-point" = data_i$uscrs2, "uscrs 2.0 6-status" = data_i$uscrs_6_flipped, "uscrs 2.0 6-status + 50-point" = data_i$uscrs_6_rank, "waiting time + status" = data_i$rank, "status only" = data_i$status_flipped),
     formula = Hist(time, outcome) ~ albumin + log(bilirubin + 1) + 
               eGFR + sodium + log(BNP + 1) * BNP_NT_Pro + 
               durable_LVAD + short_MCS_ever + status,
@@ -988,27 +993,26 @@ for (i in 1:length(test_dates)) {
     mutate(interval = paste0("Interval_", i))  # Add dataset identifier
 }
 pval_df <- do.call(rbind.data.frame,p_val)
-auc_df <- bind_rows(auc_results) %>%
-  mutate(Model=factor(model,levels=c("status only","uscrs 2.0 50-point","uscrs 2.0 6-status",labels=c("Status (1-6)","US-CRS 50-point","US-CRS 2.0 6-status"))))
-roc_df <- do.call(rbind.data.frame,roc_plot)
+auc_df <- bind_rows(auc_results)
 
 # add dates
 auc_results
 auc_df <- auc_df %>%
   mutate(model = droplevels(model))
-auc_df <- auc_df %>%
-  mutate(Model = droplevels(Model))
-auc_df$Date <- rep(test_dates, each = dim(table(auc_df$Model)))
-pval_df$Date <- rep(test_dates, each = choose(dim(table(auc_df$Model)),2))
+auc_df$Date <- rep(test_dates, each = dim(table(auc_df$model)))
+pval_df$Date <- rep(test_dates, each = choose(dim(table(auc_df$model)),2))
+
+# order models
+auc_df = auc_df %>% filter(model!="uscrs 2.0 6-status + 50-point") %>% mutate(Model=factor(model,levels=c("status only","waiting time + status","uscrs 2.0 simple","uscrs 2.0 50-point","uscrs 2.0 6-status"),labels=c("Status (1-6)","Status (1-6) +\nWaiting Time","US-CRS 2.0 -\nSimple","US-CRS 2.0 -\n50-Point","US-CRS 2.0 -\n6-Status")))
+
 
 # plot results
-ggplot(auc_df %>% filter(model!="uscrs 1.0"), 
+ggplot(auc_df %>% filter(model!="uscrs 2.0 6-status"), 
        aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
   geom_line(position = position_dodge(width = 24),alpha=.85) +
   geom_point(position = position_dodge(width = 24),size=2.5) +
   geom_errorbar(position = position_dodge(width = 24),width=15,alpha=.85) +
   labs(
-    #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
     x = "Cross-section start date",
     y = "Time-dependent AUC (6-week mortality)"
   ) +
@@ -1017,14 +1021,6 @@ ggplot(auc_df %>% filter(model!="uscrs 1.0"),
     panel.background = element_rect(fill = "white", color = "white"),
     plot.background = element_rect(fill = "white", color = NA), 
     
-    # Increase font sizes
-    # plot.title = element_text(size = 18),
-    # axis.title.x = element_text(size = 16), 
-    # axis.title.y = element_text(size = 16),
-    
-    # axis.text = element_text(size = 10),
-    # legend.title = element_text(size = 14),
-    # legend.text = element_text(size = 11),
     axis.text.x = element_text(angle = 45, hjust = 1),
     
     text=element_text(size=12),
@@ -1036,10 +1032,10 @@ ggplot(auc_df %>% filter(model!="uscrs 1.0"),
     labels = format(test_dates, "%m/%d/%Y"),
     minor_breaks=F
   ) +
-  scale_shape_manual(values=c(16,17,15,12)) +
+  scale_shape_manual(values=c(16,17,15,18,10,8)) +
   scale_color_viridis_d(direction=-1)
-  # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
-  # scale_linetype_manual(values = c("dashed","solid","solid"))
+ggsave("uscrs_auc_comparison-cat.png", width = 7, height = 4, dpi = 300)
+
 ```
 
 
