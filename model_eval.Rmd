@@ -286,26 +286,26 @@ Try out all of the potential models (models A-G) in validation data (`eight_sets
 ```{r}
 # load the function to calculate predicted 1-week hazard from a binomial glm and also calculate 6-week predicted survival
 base::load("mort-pred-fun.Rdata")
-# 
-# # apply to eight_sets_valid
-# eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
-# eight_sets_valid_modB = pred_data_fun(eight_sets_valid,mortality_modelB)
-# eight_sets_valid_modC = pred_data_fun(eight_sets_valid,mortality_modelC)
-# eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
-# eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
-# eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
-# eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
-# eight_sets_valid_modH = pred_data_fun(eight_sets_valid,mortality_modelH,lasso=T)
-# 
-# # new variables created by pred_data_fun
-# names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
-# 
-# # save results
-# save(eight_sets_valid_modA,eight_sets_valid_modB,
-#      eight_sets_valid_modC,eight_sets_valid_modD,
-#      eight_sets_valid_modE,eight_sets_valid_modF,
-#      eight_sets_valid_modG,eight_sets_valid_modH,
-#      file="eight-sets-valid.Rdata")
+
+# apply to eight_sets_valid
+eight_sets_valid_modA = pred_data_fun(eight_sets_valid,mortality_modelA)
+eight_sets_valid_modB = pred_data_fun(eight_sets_valid,mortality_modelB)
+eight_sets_valid_modC = pred_data_fun(eight_sets_valid,mortality_modelC)
+eight_sets_valid_modD = pred_data_fun(eight_sets_valid,mortality_modelD)
+eight_sets_valid_modE = pred_data_fun(eight_sets_valid,mortality_modelE)
+eight_sets_valid_modF = pred_data_fun(eight_sets_valid,mortality_modelF)
+eight_sets_valid_modG = pred_data_fun(eight_sets_valid,mortality_modelG)
+eight_sets_valid_modH = pred_data_fun(eight_sets_valid,mortality_modelH,lasso=T)
+
+# new variables created by pred_data_fun
+names(eight_sets_valid_modA)[!(names(eight_sets_valid_modA)%in%names(eight_sets_valid))]
+
+# save results
+save(eight_sets_valid_modA,eight_sets_valid_modB,
+     eight_sets_valid_modC,eight_sets_valid_modD,
+     eight_sets_valid_modE,eight_sets_valid_modF,
+     eight_sets_valid_modG,eight_sets_valid_modH,
+     file="eight-sets-valid.Rdata")
 
 # apply to eight_sets_test
 eight_sets_test_modC = pred_data_fun(eight_sets_test,mortality_modelC)
@@ -339,31 +339,31 @@ getMeanAUC = function(moddata) {
   })
   return(mean(auc_results))
 }
-# getMeanAUC(eight_sets_valid_modA)
-# getMeanAUC(eight_sets_valid_modB)
-# getMeanAUC(eight_sets_valid_modC)
-# getMeanAUC(eight_sets_valid_modD)
-# getMeanAUC(eight_sets_valid_modE)
-# getMeanAUC(eight_sets_valid_modF)
-# getMeanAUC(eight_sets_valid_modG)
-# getMeanAUC(eight_sets_valid_modH)
+getMeanAUC(eight_sets_valid_modA)
+getMeanAUC(eight_sets_valid_modB)
+getMeanAUC(eight_sets_valid_modC)
+getMeanAUC(eight_sets_valid_modD)
+getMeanAUC(eight_sets_valid_modE)
+getMeanAUC(eight_sets_valid_modF)
+getMeanAUC(eight_sets_valid_modG)
+getMeanAUC(eight_sets_valid_modH)
 getMeanAUC(eight_sets_test_modC) # .807
 getMeanAUC(eight_sets_test_modE) # .798
 getMeanAUC(eight_sets_test_modF) # .795
 
-eight_sets_test_modC = eight_sets_test_modC %>%
-  filter(!is.na(prob_surv_6wk))
-eight_sets_test_modE = eight_sets_test_modE%>%
-  filter(!is.na(prob_surv_6wk))
-eight_sets_test_modF = eight_sets_test_modF %>%
-  filter(!is.na(prob_surv_6wk))
-
-test_data %>%
-  filter(is.na(CAN_GENDER)) %>%
-  pull(PX_ID)
-
-eight_sets_test_modC %>%
-  filter(is.na(prob_surv_6wk))
+# eight_sets_test_modC = eight_sets_test_modC %>%
+#   filter(!is.na(prob_surv_6wk))
+# eight_sets_test_modE = eight_sets_test_modE%>%
+#   filter(!is.na(prob_surv_6wk))
+# eight_sets_test_modF = eight_sets_test_modF %>%
+#   filter(!is.na(prob_surv_6wk))
+# 
+# test_data %>%
+#   filter(is.na(CAN_GENDER)) %>%
+#   pull(PX_ID)
+# 
+# eight_sets_test_modC %>%
+#   filter(is.na(prob_surv_6wk))
 
 ```
 
