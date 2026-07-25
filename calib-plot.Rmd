@@ -172,6 +172,36 @@ test_data = test_data %>%
 table(test_data$transplant,test_data$delisting) # quick check
 ```
 
+## Add US-CRS 50-point score (Model C) to test set
+```{r}
+base::load("mrdat.Rdata") # from match-run-data.R
+
+for(mod in c("modC")) { # , "modE"
+  log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
+
+  # Exponentiate to get hazard
+  haz <- exp(log_haz_col)
+
+  # Cap at 99th percentile
+  haz_99 <- quantile(haz, 0.99)
+  haz_capped <- pmin(haz, haz_99)
+
+  # Convert to log odds
+  log_odds <- log(haz_capped / (1 - haz_capped))
+
+  # Scale to 1-50
+  min_log_odds <- min(log_odds)
+  max_log_odds <- max(log_odds)
+}
+rm(log_haz_col,haz,haz_capped,log_odds)
+
+eight_sets_test_modC = eight_sets_test_modC %>%
+  mutate(haz_dth_modC = pmin(haz_dth_nowk,haz_99),
+         log_odds = log(haz_dth_modC / (1 - haz_dth_modC)),
+         uscrs2 = round(1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds)))
+
+```
+
 ## Set up validation and test data for calibration analysis
 
 Join `test_data` to the eight calendar cross-sections and include 6 weeks of follow-up per PX_ID per cross-section. Calculate IPW.
@@ -189,7 +219,7 @@ eight_sets_valid = full_join(eight_sets_valid_modA %>% select(PX_ID,current_date
 names(eight_sets_valid)
 
 # do the same for eight_sets_test
-eight_sets_test = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,prob_outcome_6wk_modC=prob_outcome_6wk),
+eight_sets_test = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,uscrs2,prob_outcome_6wk_modC=prob_outcome_6wk),
                        eight_sets_test_modF %>% select(PX_ID,current_date,prob_outcome_6wk_modF=prob_outcome_6wk))
 summary(eight_sets_test$prob_outcome_6wk_modC)
 summary(eight_sets_test$prob_outcome_6wk_modF)
@@ -420,6 +450,56 @@ ggplot(calib_status_long,
   labs(x = "Status", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
 # ggsave("calib-by-status-NEW.png",width=7.5,height=6.5)
+```
+
+## Calibration of 50-point score
+```{r}
+calibdat50pt = makeCalibData(eight_sets_test_long,20,"uscrs2")
+ggplot(calibdat50pt,aes(x=exp,y=obs)) +
+  # geom_abline(intercept=0,slope=1,color="darkgrey") +
+  geom_errorbar(aes(ymin=lower,ymax=upper)) +
+  geom_point(size=2,alpha=.8) + 
+  scale_x_continuous(limits=c(0,50)) +
+  scale_y_continuous(limits=c(0,0.25),
+                     oob = scales::rescale_none) +
+  # # coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  # facet_zoom(xlim=c(0,.03),ylim=c(0,.03),zoom.size=1,show.area=F) +  
+  theme_bw() +
+  theme(text=element_text(size=14)) +
+  labs(y="Observed 6-week mortality probability",x="US-CRS 2.0 50-Point")
+```
+
+
+## Calibration for score 50
+```{r calib50}
+# what number and percent w/ score 50
+table(eight_sets_test$uscrs2)["50"]
+prop.table(table(eight_sets_test$uscrs2))["50"]
+
+# some checks
+eight_sets_test_long %>% distinct(PX_ID,grp) %>% nrow
+eight_sets_test_long %>% distinct(PX_ID,grp,uscrs2) %>% nrow
+eight_sets_test_long %>% distinct(PX_ID,grp,prob_outcome_6wk_modC) %>% nrow
+
+# make calibration plot
+calibdat50 = makeCalibData(eight_sets_test_long %>%
+                             group_by(PX_ID,grp) %>%
+                             filter(first(uscrs2)==50) %>%
+                             ungroup,
+                           10,"prob_outcome_6wk_modC")
+ggplot(calibdat50,aes(x=exp,y=obs)) +
+  geom_abline(intercept=0,slope=1,color="darkgrey") +
+  geom_errorbar(aes(ymin=lower,ymax=upper)) +
+  geom_point(size=2,alpha=.8) + 
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1),
+                     oob = scales::rescale_none) +
+  # # coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  # facet_zoom(xlim=c(0,.03),ylim=c(0,.03),zoom.size=1,show.area=F) +  
+  theme_bw() +
+  theme(text=element_text(size=14)) +
+  labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)",title="Calibration curve by decile of predicted risk for test-set patients with score 50")
+
 ```
 
 
