@@ -1157,6 +1157,18 @@ label(weighttab$tweight) = "Stabilized + Truncated"
 table1(~ weight + sweight + tweight | week_from_baseline, 
        data=weighttab %>% filter(!is.na(weight)), overall = F)
 
+# get proportion of weights >threshold
+threshold = 10
+weighttab = weighttab %>%
+  mutate(weight_fact = ifelse(weight>threshold,T,F),
+         sweight_fact = ifelse(sweight>threshold,T,F),
+         tweight_fact = ifelse(tweight>threshold,T,F))
+label(weighttab$weight_fact) = "Unstabilized"
+label(weighttab$sweight_fact) = "Stabilized"
+label(weighttab$tweight_fact) = "Stabilized + Truncated"
+table1(~ weight_fact + sweight_fact + tweight_fact | week_from_baseline, 
+       data=weighttab %>% filter(!is.na(weight)), overall = F)
+
 # fit model with truncated weights
 mortality_model_tweights = glm(formula = basic_form, data = combined_df, weights = tweight, family = binomial)
 mortality_model_tweights
@@ -2943,72 +2955,81 @@ ggsave("uscrs-by-status-exception.png",width=7.5,height=5,dpi=300) # Figure 3
 
 ```{r}
 # MOLLY ADDED compare weight approaches for Model C
-modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
 
+# modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
 
-mortality_c_sweights = glm(modelc_form, data = combined_df, weights = sweight, family = binomial)
+# scale to SD change for continuous variables
+modelc_form_sd = as.formula(outcome ~  albumin_at_start_s + bilirubin_at_start_s + eGFR_at_start_s + BNP_at_start_s*BNP_NT_Pro_at_start + sodium_at_start_s + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
+
+# hemo weights - what we chose
+mortality_c_sweights = glm(modelc_form_sd, data = combined_df, weights = sweight, family = binomial)
 mortality_c_sweights_VCOV = vcovCL(mortality_c_sweights, cluster = ~ PX_ID)
-
 mortality_c_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_sweights,vars=var_interest,cov=mortality_c_sweights_VCOV))
 }))
+# confirm all is well
+all.equal(mortality_c_sweights_sum,mortality_modelC_sum)
 
-mortality_c_sweights_simple = glm(modelc_form, data = combined_df, weights = sweight_simple, family = binomial)
+# USCRS 1.0 weights
+mortality_c_sweights_simple = glm(modelc_form_sd, data = combined_df, weights = sweight_simple, family = binomial)
 mortality_c_sweights_simple_VCOV = vcovCL(mortality_c_sweights_simple, cluster = ~ PX_ID)
-
 mortality_c_sweights_simple_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights_simple)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_sweights_simple,vars=var_interest,cov=mortality_c_sweights_simple_VCOV))
 }))
 
-mortality_c_sweights_status = glm(modelc_form, data = combined_df, weights = sweight_status, family = binomial)
+# status weights
+mortality_c_sweights_status = glm(modelc_form_sd, data = combined_df, weights = sweight_status, family = binomial)
 mortality_c_sweights_status_VCOV = vcovCL(mortality_c_sweights_status, cluster = ~ PX_ID)
-
 mortality_c_sweights_status_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights_status)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_sweights_status,vars=var_interest,cov=mortality_c_sweights_status_VCOV))
 }))
 
-mortality_c_sweights_waitlist = glm(modelc_form, data = combined_df, weights = sweight_waitlist, family = binomial)
+# waiting-time weights
+mortality_c_sweights_waitlist = glm(modelc_form_sd, data = combined_df, weights = sweight_waitlist, family = binomial)
 mortality_c_sweights_waitlist_VCOV = vcovCL(mortality_c_sweights_waitlist, cluster = ~ PX_ID)
-
 mortality_c_sweights_waitlist_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights_waitlist)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_sweights_waitlist,vars=var_interest,cov=mortality_c_sweights_waitlist_VCOV))
 }))
-
-mortality_c_sweights_sum
 ```
 
 ```{r}
+# make figure of different weight specifications for chosen mortality model (C)
 
+# new_names <- c("albumin_at_start" = "Albumin", "short_mcs_ever_at_start" = "Advanced MCS", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "log(BNP_at_start + 1)" = "Log BNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "impella_at_start" = "MFP", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "sodium_at_start" = "Sodium", "iabp_at_start" = "IABP")
+new_names <- c("albumin_at_start_s" = "Albumin", "short_mcs_ever_at_start" = "Advanced MCS", "BNP_at_start_s:BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "BNP_at_start_s" = "Log BNP", "bilirubin_at_start_s" = "Log Bilirubin", "impella_at_start" = "MFP", "eGFR_at_start_s" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "sodium_at_start_s" = "Sodium", "iabp_at_start" = "IABP")
 
-
-
-new_names <- c("albumin_at_start" = "Albumin", "short_mcs_ever_at_start" = "Short-term MCS", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "log(BNP_at_start + 1)" = "Log BNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "impella_at_start" = "Impella", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "sodium_at_start" = "Sodium", "iabp_at_start" = "IABP")
-term_order <- c("Albumin","Log Bilirubin","eGFR", "Log BNP", "BNP NT Pro", "Log BNP * BNP NT Pro", "Sodium", "Durable LVAD", "Short-term MCS", "Impella", "IABP")
+term_order <- c("Albumin","Log Bilirubin","eGFR", "Log BNP", "BNP NT Pro", "Log BNP * BNP NT Pro", "Sodium", "Durable LVAD", "Advanced MCS", "IABP", "MFP")
 
 # compare unweighted and weighted
-plotdat = bind_rows(mortality_c_sweights_sum %>% mutate(model="Hemodynamics Weights"),
-          mortality_c_sweights_simple_sum %>% mutate(model="Simple Weights"),
-          mortality_c_sweights_status_sum %>% mutate(model="Status Weights"), 
-          mortality_c_sweights_waitlist_sum %>% mutate(model="Waitlist Weights")) %>%
+plotdat = bind_rows(mortality_c_sweights_sum %>% mutate(model="US-CRS 1.0\n+ Status + Hemo"),
+          mortality_c_sweights_simple_sum %>% mutate(model="US-CRS 1.0"),
+          mortality_c_sweights_status_sum %>% mutate(model="US-CRS 1.0\n+ Status"), 
+          mortality_c_sweights_waitlist_sum %>% mutate(model="US-CRS 1.0\n+ Status + Hemo\n+ Waiting Time")) %>%
   mutate(
          var = recode(var, !!!new_names),
          var = factor(var,levels=term_order),
-         model = factor(model,levels=c("Hemodynamics Weights", "Simple Weights","Status Weights", "Waitlist Weights")))
+         model = factor(model,levels=c("US-CRS 1.0",
+                                       "US-CRS 1.0\n+ Status",
+                                       "US-CRS 1.0\n+ Status + Hemo",
+                                       "US-CRS 1.0\n+ Status + Hemo\n+ Waiting Time")))
 
+plotdat$model = factor(plotdat$model,levels=rev(levels(plotdat$model)))
 ggplot(plotdat %>% filter(var!="(Intercept)"),
-       aes(x = log(hr), y = var, color = model, linetype=model)) +
-  geom_point(position = position_dodge(width = 0.5),size=1) +
+       aes(x = log(hr), y = var, color = model, linetype=model, shape=model)) +
+  geom_point(position = position_dodge(width = 0.5),size=1.5) +
   geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5),linewidth=.4) +
-  labs(x = "Coefficient Estimate", y = "Term", color="Model",linetype="Model") +
+  labs(x = "Coefficient Estimate", y = "Term", color="Weight Model",linetype="Weight Model",shape="Weight Model") +
   geom_vline(xintercept=0) +
   scale_color_viridis_d() +
   ## zoom in:
   # coord_cartesian(xlim=c(-.25,.25)) +
   theme_bw() +
-  theme(text=element_text(size=12)) +
+  theme(text=element_text(size=12),
+        legend.key.spacing.y = unit(.25,"cm")) +
+  scale_shape_manual(values=c(16,17,15,12)) +
   guides(color = guide_legend(reverse = TRUE),
-         linetype = guide_legend(reverse = TRUE))
-# in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
+         linetype = guide_legend(reverse = TRUE),
+         shape = guide_legend(reverse = TRUE))
 ggsave("wts-compare-modc-specs.png",width=9,height=5)
 
 ```
@@ -3018,66 +3039,65 @@ ggsave("wts-compare-modc-specs.png",width=9,height=5)
 # Weight comparison Model C
 
 ```{r}
-# MOLLY ADDED compare weight approaches for Model C (unweighted, stabilized, truncated)
-modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
+# MOLLY ADDED compare weight approaches for Model C (unweighted, unstabilized, stabilized, truncated)
 
-mortality_c_no_weights = glm(modelc_form, data = combined_df, family = binomial)
+# no weights
+mortality_c_no_weights = glm(modelc_form_sd, data = combined_df, family = binomial)
 mortality_c_no_weights_VCOV = vcovCL(mortality_c_no_weights, cluster = ~ PX_ID)
-
 mortality_c_no_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_no_weights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_no_weights,vars=var_interest,cov=mortality_c_no_weights_VCOV))
 }))
 
-mortality_c_sweights = glm(modelc_form, data = combined_df, weights = sweight, family = binomial)
-mortality_c_sweights_VCOV = vcovCL(mortality_c_sweights, cluster = ~ PX_ID)
-
-mortality_c_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights)),function(var_interest) {
-  bind_cols(var=var_interest,getHR(mortality_c_sweights,vars=var_interest,cov=mortality_c_sweights_VCOV))
+# unstabilized weights
+mortality_c_weights = glm(modelc_form_sd, data = combined_df, weights = weight, family = binomial)
+mortality_c_weights_VCOV = vcovCL(mortality_c_weights, cluster = ~ PX_ID)
+mortality_c_weights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_weights)),function(var_interest) {
+  bind_cols(var=var_interest,getHR(mortality_c_weights,vars=var_interest,cov=mortality_c_weights_VCOV))
 }))
 
+## stabilized weights
+# mortality_c_sweights = glm(modelc_form_sd, data = combined_df, weights = sweight, family = binomial)
+# mortality_c_sweights_VCOV = vcovCL(mortality_c_sweights, cluster = ~ PX_ID)
+# mortality_c_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights)),function(var_interest) {
+#   bind_cols(var=var_interest,getHR(mortality_c_sweights,vars=var_interest,cov=mortality_c_sweights_VCOV))
+# }))
+mortality_c_sweights_sum
 
-mortality_c_tweights = glm(modelc_form, data = combined_df, weights = tweight, family = binomial)
+# stabilized + truncated weights
+mortality_c_tweights = glm(modelc_form_sd, data = combined_df, weights = tweight, family = binomial)
 mortality_c_tweights_VCOV = vcovCL(mortality_c_tweights, cluster = ~ PX_ID)
-
 mortality_c_tweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_tweights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_tweights,vars=var_interest,cov=mortality_c_tweights_VCOV))
 }))
 ```
 
 ```{r}
-modelc_form = as.formula(outcome ~  albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start)
-mortality_c_unweight = glm(modelc_form, data = combined_df,family = binomial)
-mortality_c_sweights = glm(modelc_form, data = combined_df, weights = sweight, family = binomial)
+# make figure of different weight stabilization strategies for chosen mortality model (C)
 
-
-
-new_names <- c("albumin_at_start" = "Albumin", "short_mcs_ever_at_start" = "Short-term MCS", "log(BNP_at_start + 1):BNP_NT_Pro_at_start1" = "Log BNP * BNP NT Pro", "log(BNP_at_start + 1)" = "Log BNP", "log(bilirubin_at_start + 1)" = "Log Bilirubin", "impella_at_start" = "Impella", "eGFR_at_start" = "eGFR", "durable_LVAD_at_start" = "Durable LVAD", "BNP_NT_Pro_at_start1" = "BNP NT Pro", "sodium_at_start" = "Sodium", "iabp_at_start" = "IABP")
-term_order <- c("Albumin","Log Bilirubin","eGFR", "Log BNP", "BNP NT Pro", "Log BNP * BNP NT Pro", "Sodium", "Durable LVAD", "Short-term MCS", "Impella", "IABP")
-
-# compare unweighted and weighted
 plotdat = bind_rows(mortality_c_no_weights_sum %>% mutate(model="Unweighted"),
+                    mortality_c_weights_sum %>% mutate(model="Unstabilized Weights"),
           mortality_c_sweights_sum %>% mutate(model="Stabilized Weights"),
           mortality_c_tweights_sum %>% mutate(model="Stabilized + Truncated\nWeights")) %>%
   mutate(
          var = recode(var, !!!new_names),
          var = factor(var,levels=term_order),
-         model = factor(model,levels=c("Unweighted", "Stabilized Weights","Stabilized + Truncated\nWeights")))
+         model = factor(model,levels=c("Unweighted", "Unstabilized Weights", "Stabilized Weights","Stabilized + Truncated\nWeights")))
 
 ggplot(plotdat %>% filter(var!="(Intercept)"),
-       aes(x = log(hr), y = var, color = model, linetype=model)) +
-  geom_point(position = position_dodge(width = 0.5),size=1) +
+       aes(x = log(hr), y = var, color = model, linetype=model, shape=model)) +
+  geom_point(position = position_dodge(width = 0.5),size=1.5) +
   geom_errorbarh(aes(xmin = log(lowCI), xmax = log(highCI)), height = 0.2, position = position_dodge(width = 0.5),linewidth=.4) +
-  labs(x = "Coefficient Estimate", y = "Term", color="Model",linetype="Model") +
+  labs(x = "Coefficient Estimate", y = "Term", color="Model",linetype="Model",shape="Model") +
   geom_vline(xintercept=0) +
   scale_color_viridis_d() +
   ## zoom in:
   # coord_cartesian(xlim=c(-.25,.25)) +
   theme_bw() +
   theme(text=element_text(size=12)) +
+  scale_shape_manual(values=c(16,17,15,12)) +
   guides(color = guide_legend(reverse = TRUE),
-         linetype = guide_legend(reverse = TRUE))
-# in the bias-variance tradeoff, truncated stabilized weights seem to have too much bias, almost identical to unweighted
+         linetype = guide_legend(reverse = TRUE),
+         shape = guide_legend(reverse = TRUE))
 ggsave("wts-compare-modc.png",width=9,height=5)
-
 ```
 
