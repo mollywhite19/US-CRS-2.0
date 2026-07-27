@@ -2888,7 +2888,7 @@ max_log_odds # -3.47
 pred_data = pred_data %>%
   mutate(haz_dth_nowk = pmin(haz_dth_nowk,haz_99),
          log_odds = log(haz_dth_nowk / (1 - haz_dth_nowk)),
-         uscrs2 = 1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds))
+         uscrs2 = round(1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds)))
 summary(pred_data$uscrs2) # 1-50
 
 # calculate max device support

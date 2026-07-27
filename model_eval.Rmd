@@ -954,7 +954,7 @@ eight_sets_test_mod = eight_sets_test_mod %>%
     uscrs2 >= 45 & uscrs2 < 50 ~ 2,
     uscrs2 >= 40 & uscrs2 < 45 ~ 3,
     uscrs2 >= 30 & uscrs2 < 40 ~ 4,
-    uscrs2 >= 20 & uscrs < 29 ~ 5,
+    uscrs2 >= 20 & uscrs2 < 29 ~ 5,
     TRUE ~ 6
   )) %>%
   mutate(uscrs_6_flipped = 1/uscrs_6_status)
