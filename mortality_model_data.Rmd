@@ -431,6 +431,7 @@ label(static_table$impella) = "Current microaxial flow pump"
 label(static_table$iabp) = "Current intra-aortic balloon pump"
 label(static_table$can_gender) = "Birth sex"
 label(static_table$status_numeric) = "Medical urgency status (current system)"
+label(static_table$short_MCS_ever) = "Ever on advanced mechanical circulatory support"
 
 #remove overall column
 static_table = static_table %>%
