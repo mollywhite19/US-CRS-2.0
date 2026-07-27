@@ -2848,6 +2848,7 @@ Pull the first row for each landmark in model training dataset, using Model C fo
 this_section_only = F
 if (this_section_only) {
   base::load("mortality_model_train_data.Rdata") # combined_df
+  library(dplyr)
   pred_data = combined_df %>% filter(week_from_baseline==1)
   base::load("mort-pred-fun.Rdata") # pred_data_fun
   base::load("mortality-model-options.Rdata") # mortality_modelC
@@ -2967,8 +2968,6 @@ mortality_c_sweights_VCOV = vcovCL(mortality_c_sweights, cluster = ~ PX_ID)
 mortality_c_sweights_sum = do.call(rbind.data.frame,lapply(names(coef(mortality_c_sweights)),function(var_interest) {
   bind_cols(var=var_interest,getHR(mortality_c_sweights,vars=var_interest,cov=mortality_c_sweights_VCOV))
 }))
-# confirm all is well
-all.equal(mortality_c_sweights_sum,mortality_modelC_sum)
 
 # USCRS 1.0 weights
 mortality_c_sweights_simple = glm(modelc_form_sd, data = combined_df, weights = sweight_simple, family = binomial)
@@ -3101,3 +3100,96 @@ ggplot(plotdat %>% filter(var!="(Intercept)"),
 ggsave("wts-compare-modc.png",width=9,height=5)
 ```
 
+
+
+# BNP contribution to US-CRS 2.0
+```{r}
+# calculate contribution depending on NT-proBNP
+bnp_effect = function(bnp,ntprobnp=F) {
+  ntprobnp = any(ntprobnp)
+  if (ntprobnp) {
+    .178*log(bnp+1)-1.449+.139*log(bnp+1)
+  } else {
+    .178*log(bnp+1)
+  }
+}
+
+# calculate effect at median of each
+bnp_med = pred_data %>% filter(BNP_NT_Pro_at_start==0) %>%
+  pull(BNP_at_start) %>% median
+NTbnp_med = pred_data %>% filter(BNP_NT_Pro_at_start==1) %>%
+  pull(BNP_at_start) %>% median
+bnp_med;bnp_effect(bnp_med)
+NTbnp_med;bnp_effect(NTbnp_med,T)
+
+# make plot across the range of each (BNP, NT-proBNP)
+res = 200
+bnp_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==0),
+                  seq(min(BNP_at_start),max(BNP_at_start),length.out=res))
+bnp_nt_range = with(pred_data %>% filter(BNP_NT_Pro_at_start==1),
+                  seq(min(BNP_at_start),max(BNP_at_start),length.out=res))
+plotdat = data.frame(bnp_value = c(bnp_range,bnp_nt_range),
+                     uscrs_value = c(bnp_effect(bnp_range),
+                                     bnp_effect(bnp_nt_range,T)),
+                     test = rep(c("BNP","NT-proBNP"),each=res))
+ggline = ggplot(plotdat,aes(bnp_value,uscrs_value)) +
+  geom_line(linewidth=.75) +
+  geom_hline(yintercept=0,linetype=2) +
+  facet_wrap(~test,scales="free_x") +
+  scale_y_continuous(limits=c(-.5,2)) +
+  labs(x="Lab value (pg/mL)",y="US-CRS 2.0 adjustment") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+ggline
+ggsave("BNP-effect.png", width = 7, height = 4, dpi = 300)
+
+
+# Option 1: add histogram below
+gghist = ggplot(pred_data %>% mutate(test = 
+                                       case_when(BNP_NT_Pro_at_start==0 ~ "BNP",
+                                                 BNP_NT_Pro_at_start==1 ~ "NT-proBNP",
+                                                 T ~ NA)), 
+                aes(x = BNP_at_start)) +
+  geom_histogram(bins = 40, fill = "grey60", color = "white") +
+  
+  facet_wrap(~ test,scales="free_x") +
+  labs(y="Density",x=NULL) +
+  theme_minimal() +
+  theme(strip.text = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        text=element_text(size=12))
+library(patchwork)
+ggline / gghist + plot_layout(heights = c(8,2))
+
+# Option 2: shade the adjustment from 25th/5th to 75th/95th percentile
+quantiles_df <- pred_data %>%
+   mutate(test = case_when(BNP_NT_Pro_at_start==0 ~ "BNP",
+                           BNP_NT_Pro_at_start==1 ~ "NT-proBNP",
+                           T ~ NA)) %>%
+  group_by(test) %>%
+  summarise(
+    xmin = -Inf, #quantile(BNP_at_start, 0.25),
+    xmax = Inf, #quantile(BNP_at_start, 0.75),
+    ymin = bnp_effect(quantile(BNP_at_start,0.05),test=="NT-proBNP"),#-Inf,
+    ymax = bnp_effect(quantile(BNP_at_start,0.95),test=="NT-proBNP")#Inf
+  )
+quantiles_df
+ggplot(plotdat,aes(bnp_value,uscrs_value)) +
+  geom_rect(
+    data = quantiles_df,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    fill = "grey85",
+    alpha = 0.5,
+    inherit.aes = FALSE
+  ) +
+  geom_line(linewidth=.75) +
+  geom_hline(yintercept=0,linetype=2) +
+  facet_wrap(~test,scales="free_x") +
+  scale_y_continuous(limits=c(-.5,2)) +
+  labs(x="Lab value",y="US-CRS 2.0 adjustment") +
+  theme_bw() +
+  theme(text=element_text(size=14))
+```
