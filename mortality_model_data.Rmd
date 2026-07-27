@@ -337,9 +337,8 @@ rm(df_final1)
 
 ## Make new Table 1
 ```{r}
-library(dplyr)
 # save data by week, including all weeks w/ no landmarks or rows after removal
-#save(df_final,file="discrete_data_preSplit.Rdata")
+save(df_final,file="discrete_data_preSplit.Rdata")
 
 library(table1)
 
@@ -386,7 +385,7 @@ static_table = static_table %>%
     diagnosis %in% "Re-Transplant" ~ "Retransplant",
     T ~ diagnosis
   ),
-  diag_label = factor(diag_label,levels=c("Dilated CM", "Ischemic", "Congenital", "Hypertrophic CM", "Retransplant", "Restrictive CM", "Amyloid CM", "Other", "Valvular")))
+  diag_label = factor(diag_label,levels=c("Dilated CM", "Ischemic", "Congenital", "Hypertrophic CM", "Retransplant", "Restrictive CM", "Amyloid CM", "Valvular", "Other")))
 
 # make Table 1
 ## Age, sex, diagnosis, status, short-term MCS, Impella, IABP, LVAD, eGFR, sodium, BNP, albumin, bilirubin, API, PAPI, CPO
@@ -415,10 +414,10 @@ units(static_table$cpo) = "W"
 static_table = static_table %>%
   mutate(
     status_numeric = case_when(
-      status_initial == "inactive" ~ "Inactive",
-      status_initial == "1" ~ "1 (Most Urgent)",
-      status_initial == "6" ~ "6 (Least Urgent)",
-      TRUE ~ status_initial
+      status == "inactive" ~ "Inactive",
+      status == "1" ~ "1 (most urgent)",
+      status == "6" ~ "6 (least urgent)",
+      TRUE ~ status
     ),
     can_gender = case_when(
       CAN_GENDER == "F" ~ "Female",
@@ -429,9 +428,9 @@ static_table = static_table %>%
 
 label(static_table$durable_LVAD) = "Ever on durable LVAD"
 label(static_table$impella) = "Current microaxial flow pump"
-label(static_table$iabp) = "Current Intra-aortic balloon pump"
+label(static_table$iabp) = "Current intra-aortic balloon pump"
 label(static_table$can_gender) = "Birth sex"
-label(static_table$status_numeric) = "Medical Urgency Status"
+label(static_table$status_numeric) = "Medical urgency status (current system)"
 
 #remove overall column
 static_table = static_table %>%
@@ -457,14 +456,14 @@ render.custom <- function(x, name, ...) {
     q3  <- round(quantile(x, 0.75), 1)
     
     stats <- c(
-      "Mean (Min, Max)"  = sprintf("%s (%s, %s)", m, mn, mx),
-      "Median (Q1, Q3)"  = sprintf("%s (%s, %s)", med, q1, q3)
+      "Mean [Min, Max]"  = sprintf("%s [%s, %s]", m, mn, mx),
+      "Median (IQR)"  = sprintf("%s (%s, %s)", med, q1, q3)
     )
     
     # always add a blank first row so the title row stays empty
     first_row <- if (has_missing) sprintf("N=%d", n_nonmiss) else ""
     stats <- c(stats)
-    names(stats) <- c("Mean (Min, Max)", "Median (Q1, Q3)")
+    names(stats) <- c("Mean [Min, Max]", "Median (IQR)")
     stats <- c(setNames(first_row, ""), stats)
     
     return(stats)
@@ -490,28 +489,38 @@ render.custom <- function(x, name, ...) {
   return(stats)
 }
 
-library(table1)
-library(flextable)
+# recode LVAD years to missing if not on LVAD
+static_table = static_table %>%
+mutate(lvad_years = case_when(durable_LVAD %in% "No" ~ NA,T ~ lvad_years))
 
-
-
-tbl <- table1::table1(~ age_at_listing + can_gender + diag_label + status_numeric + short_MCS_ever + 
-                  impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + 
-                  eGFR + BNP + sodium + api + papi + cpo | train_test_split_label,
+# make Table 1
+table1(~ age_at_listing + can_gender + diag_label + status_numeric + short_MCS_ever + impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + eGFR + BNP + sodium + api + papi + cpo | train_test_split_label,
                 data = static_table,
                 overall = FALSE,
                 render = render.custom,
                 render.missing = NULL)
 
-ft <- t1flex(tbl)
-ft <- flextable::autofit(ft)
 
-# save to Word
-library(officer)
-
-doc <- read_docx()
-doc <- body_add_flextable(doc, ft)
-print(doc, target = "table1_output.docx")
+# library(table1)
+# library(flextable)
+# 
+# 
+# 
+# tbl <- table1::table1(~ age_at_listing + can_gender + diag_label + status_numeric + short_MCS_ever + impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + eGFR + BNP + sodium + api + papi + cpo | train_test_split_label,
+#                 data = static_table,
+#                 overall = FALSE,
+#                 render = render.custom,
+#                 render.missing = NULL)
+# 
+# ft <- t1flex(tbl)
+# ft <- flextable::autofit(ft)
+# 
+# # save to Word
+# library(officer)
+# 
+# doc <- read_docx()
+# doc <- body_add_flextable(doc, ft)
+# print(doc, target = "table1_output.docx")
 
 ## time-varying table ##
 
