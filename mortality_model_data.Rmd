@@ -337,8 +337,9 @@ rm(df_final1)
 
 ## Make new Table 1
 ```{r}
+library(dplyr)
 # save data by week, including all weeks w/ no landmarks or rows after removal
-save(df_final,file="discrete_data_preSplit.Rdata")
+#save(df_final,file="discrete_data_preSplit.Rdata")
 
 library(table1)
 
@@ -385,7 +386,7 @@ static_table = static_table %>%
     diagnosis %in% "Re-Transplant" ~ "Retransplant",
     T ~ diagnosis
   ),
-  diag_label = factor(diag_label,levels=c("Amyloid CM","Congenital","Dilated CM","Hypertrophic CM","Ischemic","Retransplant","Restrictive CM","Valvular","Other")))
+  diag_label = factor(diag_label,levels=c("Dilated CM", "Ischemic", "Congenital", "Hypertrophic CM", "Retransplant", "Restrictive CM", "Amyloid CM", "Other", "Valvular")))
 
 # make Table 1
 ## Age, sex, diagnosis, status, short-term MCS, Impella, IABP, LVAD, eGFR, sodium, BNP, albumin, bilirubin, API, PAPI, CPO
@@ -409,8 +410,108 @@ label(static_table$api) = "Aortic pulsatility index"
 label(static_table$papi) = "Pulmonary artery pulsatility index"
 label(static_table$cpo) = "Cardiac power output"
 units(static_table$cpo) = "W"
-table1(~ age_at_listing + CAN_GENDER + diag_label + status_label + short_MCS_ever + impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + eGFR + BNP + sodium + api + papi + cpo | train_test_split_label, 
-       data=static_table, overall = F)
+
+#update status labels
+static_table = static_table %>%
+  mutate(
+    status_numeric = case_when(
+      status_initial == "inactive" ~ "Inactive",
+      status_initial == "1" ~ "1 (Most Urgent)",
+      status_initial == "6" ~ "6 (Least Urgent)",
+      TRUE ~ status_initial
+    ),
+    can_gender = case_when(
+      CAN_GENDER == "F" ~ "Female",
+      TRUE ~ "Male"
+    )
+  )
+
+
+label(static_table$durable_LVAD) = "Ever on durable LVAD"
+label(static_table$impella) = "Current microaxial flow pump"
+label(static_table$iabp) = "Current Intra-aortic balloon pump"
+label(static_table$can_gender) = "Birth sex"
+label(static_table$status_numeric) = "Medical Urgency Status"
+
+#remove overall column
+static_table = static_table %>%
+  filter(train_test_split_label != "Overall")
+
+
+
+render.custom <- function(x, name, ...) {
+  n_total <- length(x)
+  n_nonmiss <- sum(!is.na(x))
+  has_missing <- n_nonmiss < n_total
+  
+  x <- x[!is.na(x)]
+  
+  yesno_vars <- c("short_MCS_ever", "impella", "iabp", "durable_LVAD")
+  
+  if (is.numeric(x)) {
+    m   <- round(mean(x), 1)
+    mn  <- round(min(x), 1)
+    mx  <- round(max(x), 1)
+    med <- round(median(x), 1)
+    q1  <- round(quantile(x, 0.25), 1)
+    q3  <- round(quantile(x, 0.75), 1)
+    
+    stats <- c(
+      "Mean (Min, Max)"  = sprintf("%s (%s, %s)", m, mn, mx),
+      "Median (Q1, Q3)"  = sprintf("%s (%s, %s)", med, q1, q3)
+    )
+    
+    # always add a blank first row so the title row stays empty
+    first_row <- if (has_missing) sprintf("N=%d", n_nonmiss) else ""
+    stats <- c(stats)
+    names(stats) <- c("Mean (Min, Max)", "Median (Q1, Q3)")
+    stats <- c(setNames(first_row, ""), stats)
+    
+    return(stats)
+  }
+  
+  if (name %in% yesno_vars) {
+    y <- table1::render.categorical.default(x, ...)
+    yes_val <- unname(y["Yes"])
+    
+    val <- if (has_missing) {
+      sprintf("%s<br>N=%d", yes_val, n_nonmiss)
+    } else {
+      yes_val
+    }
+    
+    out <- val
+    names(out) <- ""
+    return(out)
+  }
+  
+  stats <- table1::render.categorical.default(x, ...)
+  if (has_missing) stats[1] <- sprintf("N=%d", n_nonmiss)
+  return(stats)
+}
+
+library(table1)
+library(flextable)
+
+
+
+tbl <- table1::table1(~ age_at_listing + can_gender + diag_label + status_numeric + short_MCS_ever + 
+                  impella + iabp + durable_LVAD + lvad_years + albumin + bilirubin + 
+                  eGFR + BNP + sodium + api + papi + cpo | train_test_split_label,
+                data = static_table,
+                overall = FALSE,
+                render = render.custom,
+                render.missing = NULL)
+
+ft <- t1flex(tbl)
+ft <- flextable::autofit(ft)
+
+# save to Word
+library(officer)
+
+doc <- read_docx()
+doc <- body_add_flextable(doc, ft)
+print(doc, target = "table1_output.docx")
 
 ## time-varying table ##
 
@@ -434,6 +535,7 @@ label(table_data$short_MCS_ever) = "Ever on advanced MCS"
 table_data$out_of_range_flag = factor(table_data$out_of_range_flag,labels=c("No","Yes"))
 label(table_data$out_of_range_flag) = "Any data out of range"
 table1(~ status_label + short_MCS_ever + impella + iabp + durable_LVAD + albumin + bilirubin + creatinine + BNP + sodium + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + out_of_range_flag | train_test_split_label, data=table_data,overall=F)
+
 
 ```
 
