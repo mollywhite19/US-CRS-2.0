@@ -3450,7 +3450,7 @@ stat6_imp = stat6_imp %>%
     uscrs2_new >= 45 & uscrs2_new < 50 ~ 2,
     uscrs2_new >= 40 & uscrs2_new < 45 ~ 3,
     uscrs2_new >= 30 & uscrs2_new < 40 ~ 4,
-    uscrs2_new >= 20 & uscrs2_new < 29 ~ 5,
+    uscrs2_new >= 20 & uscrs2_new < 30 ~ 5,
     TRUE ~ 6)
   )
 
@@ -3460,7 +3460,7 @@ stat6_iabp = stat6_iabp %>%
     uscrs2_new >= 45 & uscrs2_new < 50 ~ 2,
     uscrs2_new >= 40 & uscrs2_new < 45 ~ 3,
     uscrs2_new >= 30 & uscrs2_new < 40 ~ 4,
-    uscrs2_new >= 20 & uscrs2_new < 29 ~ 5,
+    uscrs2_new >= 20 & uscrs2_new < 30 ~ 5,
     TRUE ~ 6)
   )
 
@@ -3488,7 +3488,19 @@ impella_sankey <- merge(impella_sankey,
                           by.x = c('x', 'node'),
                           by.y = c('x', 'node'),
                           all.x = TRUE)
+#color scheme
+original_order <- c("1", "2", "3", "4", "5", "6") 
+default_colors <- scales::hue_pal()(length(original_order))
+names(default_colors) <- original_order
 
+#force status 1 up top
+node_order <- c("6", "5", "4", "3", "2", "1") 
+
+impella_sankey <- impella_sankey %>%
+  mutate(node = factor(node, levels = node_order),
+         next_node = factor(next_node, levels = node_order))
+
+#sankey
 impella_plot <- ggplot(impella_sankey, aes(x = x,
                      next_x = next_x,
                      node = node,
@@ -3503,6 +3515,7 @@ impella_plot <- ggplot(impella_sankey, aes(x = x,
                              fill = "white") + 
   theme_bw() + 
   theme(legend.position = 'none') + 
+  scale_fill_manual(values = default_colors) + 
   theme(axis.title = element_blank(),
                  axis.text.y = element_blank(),
                  axis.ticks = element_blank(),
@@ -3512,7 +3525,7 @@ impella_plot <- ggplot(impella_sankey, aes(x = x,
   scale_x_discrete(labels = c("uscrs_6_status" = "USCRS Status", 
                                 "uscrs_new_6status" = "UCRS Status with impella"))
 
-
+impella_plot
 ggsave(impella_plot, file = "imp_sankey.png", width = 10, height = 8)
 ```
 
@@ -3533,6 +3546,17 @@ iabp_sankey <- merge(iabp_sankey,
                           by.x = c('x', 'node'),
                           by.y = c('x', 'node'),
                           all.x = TRUE)
+#color scheme
+original_order <- c("1", "2", "3", "4", "5", "6") 
+default_colors <- scales::hue_pal()(length(original_order))
+names(default_colors) <- original_order
+
+#force status 1 up top
+node_order <- c("6", "5", "4", "3", "2", "1") 
+
+iabp_sankey <- iabp_sankey %>%
+  mutate(node = factor(node, levels = node_order),
+         next_node = factor(next_node, levels = node_order))
 
 iabp_plot <- ggplot(iabp_sankey, aes(x = x,
                      next_x = next_x,
@@ -3547,7 +3571,8 @@ iabp_plot <- ggplot(iabp_sankey, aes(x = x,
                              color = "black",
                              fill = "white") + 
   theme_bw() + 
-  theme(legend.position = 'none') + 
+  theme(legend.position = 'none')  + 
+  scale_fill_manual(values = default_colors) + 
   theme(axis.title = element_blank(),
                  axis.text.y = element_blank(),
                  axis.ticks = element_blank(),
@@ -3558,6 +3583,7 @@ iabp_plot <- ggplot(iabp_sankey, aes(x = x,
                                 "uscrs_new_6status" = "UCRS Status with IABP"))
 iabp_plot
 ggsave(iabp_plot, file = "iabp_sankey.png", width = 10, height = 8)
+
 ```
 
 
