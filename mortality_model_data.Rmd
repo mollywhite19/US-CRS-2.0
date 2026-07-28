@@ -3310,43 +3310,43 @@ ggplot(plotdat,aes(bnp_value,uscrs_value)) +
 ```{r}
 ## Molly - start here and uncomment below
 
-## if only running this section:
-# this_section_only = T
-# if (this_section_only) {
-#   base::load("mortality_model_train_data.Rdata") # combined_df
-#   library(dplyr)
-#   pred_data = combined_df %>% filter(week_from_baseline==1)
-#   base::load("mort-pred-fun.Rdata") # pred_data_fun
-#   base::load("mortality-model-options.Rdata") # mortality_modelC
-#   pred_data = pred_data_fun(pred_data,mortality_modelC)
-#   gc()
-# }
-# 
-# base::load("mrdat.Rdata") # from match-run-data.R
-# 
-# for(mod in c("modC")) { # , "modE"
-#   log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
-#   
-#   # Exponentiate to get hazard
-#   haz <- exp(log_haz_col)
-#   
-#   # Cap at 99th percentile
-#   haz_99 <- quantile(haz, 0.99)
-#   haz_capped <- pmin(haz, haz_99)
-#   
-#   # Convert to log odds
-#   log_odds <- log(haz_capped / (1 - haz_capped))
-#   
-#   # Scale to 1-50
-#   min_log_odds <- min(log_odds)
-#   max_log_odds <- max(log_odds)
-# }
-# rm(log_haz_col,haz,haz_capped,log_odds)
-# 
-# pred_data = pred_data %>%
-#   mutate(haz_dth_nowk = pmin(haz_dth_nowk,haz_99),
-#          log_odds = log(haz_dth_nowk / (1 - haz_dth_nowk)),
-#          uscrs2 = round(1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds)))
+# if only running this section:
+this_section_only = T
+if (this_section_only) {
+  base::load("mortality_model_train_data.Rdata") # combined_df
+  library(dplyr)
+  pred_data = combined_df %>% filter(week_from_baseline==1)
+  base::load("mort-pred-fun.Rdata") # pred_data_fun
+  base::load("mortality-model-options.Rdata") # mortality_modelC
+  pred_data = pred_data_fun(pred_data,mortality_modelC)
+  gc()
+}
+
+base::load("mrdat.Rdata") # from match-run-data.R
+
+for(mod in c("modC")) { # , "modE"
+  log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
+
+  # Exponentiate to get hazard
+  haz <- exp(log_haz_col)
+
+  # Cap at 99th percentile
+  haz_99 <- quantile(haz, 0.99)
+  haz_capped <- pmin(haz, haz_99)
+
+  # Convert to log odds
+  log_odds <- log(haz_capped / (1 - haz_capped))
+
+  # Scale to 1-50
+  min_log_odds <- min(log_odds)
+  max_log_odds <- max(log_odds)
+}
+rm(log_haz_col,haz,haz_capped,log_odds)
+
+pred_data = pred_data %>%
+  mutate(haz_dth_nowk = pmin(haz_dth_nowk,haz_99),
+         log_odds = log(haz_dth_nowk / (1 - haz_dth_nowk)),
+         uscrs2 = round(1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds)))
 ```
 
 
@@ -3454,9 +3454,110 @@ stat6_imp = stat6_imp %>%
     TRUE ~ 6)
   )
 
+stat6_iabp = stat6_iabp %>%
+  mutate(uscrs_new_6status = case_when(
+    uscrs2_new == 50 ~ 1,
+    uscrs2_new >= 45 & uscrs2_new < 50 ~ 2,
+    uscrs2_new >= 40 & uscrs2_new < 45 ~ 3,
+    uscrs2_new >= 30 & uscrs2_new < 40 ~ 4,
+    uscrs2_new >= 20 & uscrs2_new < 29 ~ 5,
+    TRUE ~ 6)
+  )
+
 ## working
 # Sankey diagram of how many go from uscrs_6_status to uscrs_new_6status
+# For grace, if you don't have ggsankey package you can load it from github:
+# library(remotes)
+# remotes::install_github("davidsjoberg/ggsankey")
+library(ggsankey)
 
 
+impella_sankey <- stat6_imp %>%
+  ungroup() %>%
+  select(uscrs_6_status, uscrs_new_6status) %>%
+  make_long(uscrs_6_status, uscrs_new_6status)
 
+# tally within each x position separately, not across both variables
+stat6_plot <- impella_sankey %>%
+  dplyr::group_by(x, node) %>%
+  tally()
+
+# merge on BOTH x and node so counts stay specific to each variable
+impella_sankey <- merge(impella_sankey,
+                          stat6_plot,
+                          by.x = c('x', 'node'),
+                          by.y = c('x', 'node'),
+                          all.x = TRUE)
+
+impella_plot <- ggplot(impella_sankey, aes(x = x,
+                     next_x = next_x,
+                     node = node,
+                     next_node = next_node,
+                     fill = factor(node),
+                     label = paste0(node, " = ", n))) + 
+  geom_sankey(flow.alpha = 0.5,
+                      node.color = "black",
+                      show.legend = TRUE) + 
+  geom_sankey_label(size = 3,
+                             color = "black",
+                             fill = "white") + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  theme(axis.title = element_blank(),
+                 axis.text.y = element_blank(),
+                 axis.ticks = element_blank(),
+                 panel.grid = element_blank()) + 
+  labs(title = "Change in USCRS status after adding an impella") +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5)) + 
+  scale_x_discrete(labels = c("uscrs_6_status" = "USCRS Status", 
+                                "uscrs_new_6status" = "UCRS Status with impella"))
+
+
+ggsave(impella_plot, file = "imp_sankey.png", width = 10, height = 8)
 ```
+
+```{r}
+iabp_sankey <- stat6_iabp %>%
+  ungroup() %>%
+  select(uscrs_6_status, uscrs_new_6status) %>%
+  make_long(uscrs_6_status, uscrs_new_6status)
+
+# tally within each x position separately, not across both variables
+stat6_plot <- iabp_sankey %>%
+  dplyr::group_by(x, node) %>%
+  tally()
+
+# merge on BOTH x and node so counts stay specific to each variable
+iabp_sankey <- merge(iabp_sankey,
+                          stat6_plot,
+                          by.x = c('x', 'node'),
+                          by.y = c('x', 'node'),
+                          all.x = TRUE)
+
+iabp_plot <- ggplot(iabp_sankey, aes(x = x,
+                     next_x = next_x,
+                     node = node,
+                     next_node = next_node,
+                     fill = factor(node),
+                     label = paste0(node, " = ", n))) + 
+  geom_sankey(flow.alpha = 0.5,
+                      node.color = "black",
+                      show.legend = TRUE) + 
+  geom_sankey_label(size = 3,
+                             color = "black",
+                             fill = "white") + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  theme(axis.title = element_blank(),
+                 axis.text.y = element_blank(),
+                 axis.ticks = element_blank(),
+                 panel.grid = element_blank()) + 
+  labs(title = "Change in USCRS status after adding an IABP") +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5)) + 
+  scale_x_discrete(labels = c("uscrs_6_status" = "USCRS Status", 
+                                "uscrs_new_6status" = "UCRS Status with IABP"))
+iabp_plot
+ggsave(iabp_plot, file = "iabp_sankey.png", width = 10, height = 8)
+```
+
+
