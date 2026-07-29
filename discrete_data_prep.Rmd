@@ -704,14 +704,18 @@ pred
 # run MICE
 imp <- mice(df_dedup, method = method, predictorMatrix = pred, m = 5, seed = 123)
 
-
+# make long dataset of all imputed datasets and join to df_final
+df_long <- complete(imp, "long")
+df_long <- left_join(df_long,df_final %>% select(-all_of(feature_cols)),
+                     by=c("PX_ID","current_date")) %>%
+  fill(all_of(feature_cols), .direction = "down")
 
 ```
 
 
 ## Calculate eGFR
 ```{r}
-df_final <- df_final %>%
+df_long <- df_long %>%
   mutate(eGFR = case_when(
     CAN_GENDER == 'F' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.7), 1)^(-0.241)) *
       (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing) * 1.012,
@@ -724,7 +728,7 @@ df_final <- df_final %>%
 ## Define hemodynamics
 ```{r}
 # define hemodynamics
-df_final <- df_final %>%
+df_long <- df_long %>%
   mutate(
     cpo = (1/451) * cardiac_output * (((1/3)*systolicBP) + ((2/3)*diastolicBP)),
     api = (systolicBP - diastolicBP) / PCWP,
@@ -742,19 +746,15 @@ df_final <- df_final %>%
 
 
 # fix API when negative (recode as missing)
-summary(df_final$api)
-df_final = df_final %>%
+summary(df_long$api)
+df_long = df_long %>%
   mutate(api = ifelse(api<0,NA,api),
          api = ifelse(is.na(api),median(api,na.rm=T),api))
-summary(df_final$api)
+summary(df_long$api)
 ```
 
 ## Save discrete time data
 ```{r}
-# check numbers
-dim(table(df_final$PX_ID)) # 33961
-table(df_final$transplant) # 23928 
-
 # save dataset
-save("df_final", file =  "discrete_final_data_MICE.RData")
+save("df_long", file =  "discrete_final_data_MICE.RData")
 ```
