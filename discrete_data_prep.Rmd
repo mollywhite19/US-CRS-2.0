@@ -674,7 +674,35 @@ df_final %>% select(albumin,bilirubin,sodium,BNP,BNP_NT_Pro,
                     impella,iabp,impella_ever,iabp_ever,diagnosis,lvad_years) %>%
   apply(.,2,function(col) sum(is.na(col)))
 
+library(mice)
 
+# first reduce df_final
+nrow(df_final)
+feature_cols <- c(
+  "albumin", "bilirubin", "sodium", "BNP", "BNP_NT_Pro",
+  "durable_LVAD", "short_MCS_ever", "status", "CAN_GENDER",
+  "creatinine", "age_at_listing", "cardiac_output", "systolicBP",
+  "diastolicBP", "PCWP", "PASP", "PADP", "central_venous_pressure",
+  "impella", "iabp", "impella_ever", "iabp_ever", "diagnosis", "lvad_years"
+)
+df_dedup <- df_final %>%
+  arrange(PX_ID, current_date) %>%
+  distinct(PX_ID, across(all_of(feature_cols)), .keep_all = TRUE) %>%
+  select(PX_ID, current_date, all_of(feature_cols)) %>%
+  # MICE needs all characters to be factors
+  mutate(across(where(is.character), as.factor))
+
+# set up for MICE
+imp0 = mice(df_dedup,maxit=0)
+imp0$loggedEvents
+method = imp0$method
+pred = imp0$predictorMatrix
+method["BNP_NT_Pro"] = "logreg"
+pred[,c("PX_ID","current_date")] = 0
+pred
+
+# run MICE
+imp <- mice(df_dedup, method = method, predictorMatrix = pred, m = 5, seed = 123)
 
 
 
