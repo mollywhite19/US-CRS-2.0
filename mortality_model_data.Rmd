@@ -25,368 +25,299 @@ library(sandwich)
 ```
 
 
-# Fit transplant models for IPW
-The denominator of the inverse probability weights is a function of the time-varying probability of transplant. We estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the training discrete-time dataset from listing to removal and allowing patient characteristics to update at the beginning of each week.
-
-We are fitting this model in the training data, even though no mortality information are used, because transplant probabilities shift over time and we have data over a long time period, from 2019 through August 2025. Weights for model evaluation should therefore be based on transplant models fit to the validation and/or test data.
-
-We considered four specifications of the model for the denominator of the weights:
-
-   - US-CRS 1.0 variables
-   - US-CRS 1.0 variables + status
-   - US-CRS 1.0 variables + status + hemodynamics
-   - US-CRS 1.0 variables + status + hemodynamics + time since listing
-   
-The denominator weights should adjust for all time-varying confounders of transplant and mortality, and balance the distribution of confounders at each timepoint. Status was considered a potential confounder because it is a strong predictor of transplant under the current heart allocation system and may provide additional information about mortality.
-
-We then assessed covariate balance after weighting each week of the discrete-time dataset by the inverse probability of receiving the observed treatment (transplant or no transplant) that week. The weighted distributions of all variables (US-CRS 1.0 variables + status + hemodynamics + time since listing) were compared between the groups "transplant" and "no transplant", where patients could contribute to both groups, joining the "transplant" group on their week of receiving transplant.
-
-The model with US-CRS 1.0 variables + status + hemodynamics had the best covariate balance.
-
-## Compare denominator models
+# Set up modeling data in each imputed dataset
 ```{r}
-## Model with US-CRS 1.0 vars, status, and hemodynamics
-tx_status_hemo_model = glm(formula = as.formula(
-   transplant ~ 
-    ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
-    ns(BNP, df = 3)*BNP_NT_Pro + 
-    durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = train_data, family = binomial)
-tx_status_hemo_model
-summary(tx_status_hemo_model)
+combined_df_imp = lapply(1:5,function(i) {
+  train_data = subset(df_long,.imp==i)
 
-## calculate weights for covariate balance assessment ##
-
-## Predict probability of transplant
-train_data$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=train_data, type = "response")
-
-## Construct weight variables for covariate balance assessment
-train_data <- train_data %>%
-  mutate(weight_hemo = if_else(transplant == 1, 1 / fit_prob_hemo, 1 / (1 - fit_prob_hemo)))
-
-# with chosen model, set probability of not receiving a transplant each week
-train_data = train_data %>%
-  mutate(prob_no_tx = 1 - fit_prob_hemo)
-```
-
-## Fit numerator model for stabilized weights
-For stabilized weights, we also need to model the time-varying probability of transplant based on variables at baseline, which is, for us, at the start of a 6-week window. Any variables in the numerator model have to be included in the marginal structural model, so we restricted to the variables in US-CRS 1.0 (the base model) for this step. Again, we estimated this probability by a discrete-time survival model (ie, logistic regression) for time to transplant, using the training discrete-time dataset from listing to removal, but divided into non-overlapping 6-week windows, with predictors collected at the start of the window.
-
-Note that rows after removal/transplant are not needed for modeling the probability of transplant, because after removal, the probability of transplant is 0.
-```{r}
-
-## create numerator of stabilized weights ##
-# we want Pr(transplant) given variables at start of 6-week window
-# for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of train_data
-
-# create 6-week windows of train_data
-train_data = train_data %>%
-  group_by(PX_ID) %>%
-  mutate(window=ceiling(row_number()/6),
-         week_from_baseline = (row_number() - 6*(window-1))) %>%
-  ungroup()
-# train_data %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
-train_data = train_data %>%
-  group_by(PX_ID,window) %>%
-  mutate(albumin_at_start = first(albumin),
-         bilirubin_at_start = first(bilirubin),
-         eGFR_at_start = first(eGFR),
-         sodium_at_start = first(sodium),
-         BNP_at_start = first(BNP),
-         BNP_NT_Pro_at_start = first(BNP_NT_Pro),
-         durable_LVAD_at_start = first(durable_LVAD),
-         short_mcs_ever_at_start = first(short_MCS_ever)) %>%
-  ungroup()
-
-# fit transplant model
-## just US-CRS variables bc anything in this numerator model has to be in the mortality model
-tx_model_first = glm(
-   transplant ~ 
-    ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = train_data, family = binomial)
-summary(tx_model_first)
-
-# remove new variables from train_data
-train_data = train_data %>% select(-(window:short_mcs_ever_at_start))
-
-```
-
-
-
-
-
-## Create week variable
-```{r}
-train_data = train_data %>% 
-  group_by(PX_ID) %>%
-  mutate(
-    week = row_number()
-) %>% relocate(week, .after = CAN_LISTING_CTR_CD) %>% ungroup
-```
-
-
-## Censor the training data on 8/15/2023
-Note: This code just censors the follow-up after removal for delisted candidates.
-```{r}
-censor_date_train = mdy("8-15-2023")
-train_data = train_data %>%
-  mutate(death_after_delisting_dt = 
-           as.Date(can_listing_dt) + removal_time + time_until_death_after_delisting,
-         delisting_dt = ifelse(!is.na(time_until_censor_after_delisting) |
-                                 !is.na(time_until_death_after_delisting),
-           as.Date(can_listing_dt) + removal_time,ymd(NA)),
-         ## fix these
-         # code as missing if delisted after censor_date_train
-         time_until_death_after_delisting =
-           ifelse(is.na(delisting_dt) |
-                    death_after_delisting_dt > censor_date_train |
-                    delisting_dt > censor_date_train,
-                  NA,time_until_death_after_delisting),
-         time_until_censor_after_delisting =
-           ifelse(!is.na(delisting_dt) & delisting_dt <= censor_date_train &
-                    is.na(time_until_death_after_delisting) &
-                    !(CAN_REM_CD %in% 13),
-                  censor_date_train - delisting_dt,NA)
-          )
+  ## Model with US-CRS 1.0 vars, status, and hemodynamics
+  tx_status_hemo_model = glm(formula = as.formula(
+     transplant ~ 
+      ns(albumin, df = 3) + ns(bilirubin, df = 3) + ns(eGFR, df = 3) + ns(sodium, df = 3) + 
+      ns(BNP, df = 3)*BNP_NT_Pro + 
+      durable_LVAD + short_MCS_ever + status + ns(cpo, df = 3) + ns(api, df = 3) + ns(papi, df = 3)), data = train_data, family = binomial)
   
-```
-
-
-## Adjust delisting time variables to censor at 6 weeks and create additional rows after delisting
-```{r}
-
-# Adjust delisting time variables to censor at 6 weeks
-# Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
-# If candidates dies more than 4/5 weeks after delisting, they are censored
-train_data = train_data %>% group_by(PX_ID) %>% 
+  ## calculate weights for covariate balance assessment ##
   
-  mutate(
-    # if we have full follow-up for the week, follow for censoring (floor)
-    time_until_censor_after_delisting = 
-      case_when(row_number() == n() & !is.na(time_until_censor_after_delisting) ~ 
-                  floor(pmax(0,removal_time + time_until_censor_after_delisting - interval_stop)/7)*7,
-                T ~ NA),
-    # follow for death even w/o full week (ceiling)
-    time_until_death_after_delisting = 
-      case_when(row_number() == n() & !is.na(time_until_death_after_delisting) ~ 
-                  ceiling(pmax(0,removal_time + time_until_death_after_delisting - interval_stop)/7)*7,
-                T ~ NA)) %>%
+  ## Predict probability of transplant
+  train_data$fit_prob_hemo <- predict(tx_status_hemo_model, newdata=train_data, type = "response")
   
-  fill(time_until_censor_after_delisting,time_until_death_after_delisting,.direction="downup") %>%
-
-  # censor at 6 weeks
-  mutate(time_until_censor_after_delisting = case_when(
-    time_until_censor_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
-    time_until_censor_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
-    time_until_death_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
-    time_until_death_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
-    TRUE ~ time_until_censor_after_delisting
-  ),
-    # recode time to death as missing if censored
-    time_until_death_after_delisting = ifelse(!is.na(time_until_censor_after_delisting),NA,
-                                              time_until_death_after_delisting),
-    outcome = ifelse(!is.na(time_until_censor_after_delisting),0,outcome)
+  ## Construct weight variables for covariate balance assessment
+  train_data <- train_data %>%
+    mutate(weight_hemo = if_else(transplant == 1, 1 / fit_prob_hemo, 1 / (1 - fit_prob_hemo)))
+  
+  # with chosen model, set probability of not receiving a transplant each week
+  train_data = train_data %>%
+    mutate(prob_no_tx = 1 - fit_prob_hemo)
+  
+  ## create numerator of stabilized weights ##
+  # we want Pr(transplant) given variables at start of 6-week window
+  # for simplicity (and to avoid correlated data), we will model this in non-overlapping 6-week windows of train_data
+  
+  # create 6-week windows of train_data
+  train_data = train_data %>%
+    group_by(PX_ID) %>%
+    mutate(window=ceiling(row_number()/6),
+           week_from_baseline = (row_number() - 6*(window-1))) %>%
+    ungroup()
+  # train_data %>% select(PX_ID,interval_start,interval_stop,transplant,window,week_from_baseline) %>% head(20)
+  train_data = train_data %>%
+    group_by(PX_ID,window) %>%
+    mutate(albumin_at_start = first(albumin),
+           bilirubin_at_start = first(bilirubin),
+           eGFR_at_start = first(eGFR),
+           sodium_at_start = first(sodium),
+           BNP_at_start = first(BNP),
+           BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+           durable_LVAD_at_start = first(durable_LVAD),
+           short_mcs_ever_at_start = first(short_MCS_ever)) %>%
+    ungroup()
+  
+  # fit transplant model
+  ## just US-CRS variables bc anything in this numerator model has to be in the mortality model
+  tx_model_first = glm(
+     transplant ~ 
+      ns(albumin_at_start, df = 3) + ns(bilirubin_at_start, df = 3) + ns(eGFR_at_start, df = 3) + ns(sodium_at_start, df = 3) + ns(BNP_at_start, df = 3)*BNP_NT_Pro_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + factor(week_from_baseline), data = train_data, family = binomial)
+  
+  # remove new variables from train_data
+  train_data = train_data %>% select(-(window:short_mcs_ever_at_start))
+  
+  train_data = train_data %>% 
+    group_by(PX_ID) %>%
+    mutate(
+      week = row_number()
+  ) %>% relocate(week, .after = CAN_LISTING_CTR_CD) %>% ungroup
+  
+  censor_date_train = mdy("8-15-2023")
+  train_data = train_data %>%
+    mutate(death_after_delisting_dt = 
+             as.Date(can_listing_dt) + removal_time + time_until_death_after_delisting,
+           delisting_dt = ifelse(!is.na(time_until_censor_after_delisting) |
+                                   !is.na(time_until_death_after_delisting),
+             as.Date(can_listing_dt) + removal_time,ymd(NA)),
+           ## fix these
+           # code as missing if delisted after censor_date_train
+           time_until_death_after_delisting =
+             ifelse(is.na(delisting_dt) |
+                      death_after_delisting_dt > censor_date_train |
+                      delisting_dt > censor_date_train,
+                    NA,time_until_death_after_delisting),
+           time_until_censor_after_delisting =
+             ifelse(!is.na(delisting_dt) & delisting_dt <= censor_date_train &
+                      is.na(time_until_death_after_delisting) &
+                      !(CAN_REM_CD %in% 13),
+                    censor_date_train - delisting_dt,NA)
+            )
     
-)
-
-## Determine delisting row and # of duplicates we need after delisting, until death or censoring
-train_data = train_data %>% group_by(PX_ID) %>% mutate(
-  delisting = case_when(
-    (!is.na(time_until_death_after_delisting) | !is.na(time_until_censor_after_delisting)) & row_number() == n() ~ 1,
-    TRUE ~ 0)
-  ) %>% ungroup() %>% mutate(
-  duplicates_after_delisting = case_when(
-    delisting == 1 & time_until_death_after_delisting > 0 ~
-      time_until_death_after_delisting/7,
-    delisting == 1 & time_until_censor_after_delisting > 0 ~ 
-      time_until_censor_after_delisting/7,
-  TRUE ~ 0))
-
-## repeat rows for the duplicates after delisting
-# and recode interval_start, interval_stop
-train_data = train_data %>%
-  slice(rep(row_number(), duplicates_after_delisting+1)) %>%
-  group_by(PX_ID) %>%
-  mutate(week=row_number()) %>%
-  group_by(PX_ID,duplicates_after_delisting) %>%
-  mutate(dup=row_number()-1) %>%
-  ungroup() %>%
-  mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
-         interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop)) %>%
-  select(-dup)
-
-# code outcome for last row - now outcome is correct
-train_data = train_data %>%
-  group_by(PX_ID) %>%
-  mutate(outcome = case_when(
-    row_number()==n() & outcome==1 ~ 1,
-    row_number()==n() & !is.na(time_until_death_after_delisting) & is.na(time_until_censor_after_delisting) ~ 1,
-    T ~ 0))
-```
-
-
-## Adjust prob_no_tx variable after delisting
-```{r}
-# set prob_no_tx to 1 after delisting
-train_data = train_data %>%
-  group_by(PX_ID) %>%
-  mutate(delisting2 = cumsum(delisting),
-         prob_no_tx = ifelse(delisting2>1,1,prob_no_tx))
-```
-
-
-
-# Create duplicate observations for each landmark
-```{r}
-# First 4 weeks don't have 3 landmarks, so they have fewer duplicates
-train_data = train_data %>% 
-  ungroup() %>%
-  mutate(
-  duplicate_amount = case_when(
-    week %in% c(1,2) ~ 0,
-    week %in% c(3,4) ~ 1,
-    TRUE ~ 2
-  ))
   
-# create duplicate rows
-train_data = train_data %>%
-  slice(rep(row_number(), duplicate_amount+1)) %>% relocate(duplicate_amount, .after = CAN_LISTING_CTR_CD)
-```
-
-## Define landmark variable as function of PX_ID, week, and duplicate number
-Also, remove transplant rows, when candidates were censored mid-week.
-```{r}
-
-combined_df = train_data %>% group_by(PX_ID, week) %>%
-  mutate(rown = row_number()) %>% ungroup() %>%
-  mutate(landmark = case_when(
-    week %in% c(1,2) ~ 1,
-    rown == 1 & week %in% c(3,4,5,6) ~ 1,
-    rown == 1 & !(week %in% c(1,2,3,4,5,6)) ~ ceiling(week/2) - 2,
-    rown == 2 & week %in% c(3,4,5,6) ~ 2,
-    rown == 2 & !(week %in% c(3,4,5,6)) ~ ceiling(week/2) - 1,
-    rown == 3 & week %in% c(5,6) ~ 3,
-    rown == 3 ~ ceiling(week/2)
-  )) %>% arrange(PX_ID, landmark) %>% 
-  relocate(landmark, .after = CAN_LISTING_CTR_CD) %>%
-  group_by(PX_ID,landmark) %>%
-  mutate(week_from_baseline = row_number(),
-         rem=first(delisting2)>1) %>% ungroup() %>% filter(!rem) %>% select(-rem)
-
-# Create weight variable based on prob_no_tx
-combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
-  weight = 1/(cumprod(prob_no_tx))
-) %>% ungroup()
-
-# remove transplant weeks
-combined_df = combined_df %>% filter(transplant == 0)
-
-```
-
-## Landmark start variables and calculate stabilized weights
-```{r}
-
-combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
-  albumin_at_start = first(albumin),
-  bilirubin_at_start = first(bilirubin),
-  eGFR_at_start = first(eGFR),
-  sodium_at_start = first(sodium),
-  BNP_at_start = first(BNP),
-  BNP_NT_Pro_at_start = first(BNP_NT_Pro),
-  durable_LVAD_at_start = first(durable_LVAD),
-  short_mcs_ever_at_start = first(short_MCS_ever),
-  status_at_start = first(status),
-  cpo_at_start = first(cpo),
-  api_at_start = first(api),
-  papi_at_start = first(papi), 
-  lvad_years_at_start = first(lvad_years),
-  impella_at_start = first(impella),
-  iabp_at_start = first(iabp),
-  impella_ever_at_start = first(impella_ever),
-  iabp_ever_at_start = first(iabp_ever),
-  diagnosis_at_start = first(diagnosis)
-) %>% ungroup()
-
-# calculate numerator for stabilized weights
-combined_df = combined_df %>% mutate(
-  prob_no_tx_start = 1 - predict(tx_model_first, newdata = combined_df, type = "response"),
-  prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start))
-
-# Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
-combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
-  sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
-) %>% ungroup
-```
-
-## Recode BNP_NT_Pro as character
-```{r}
-combined_df = combined_df %>% mutate(
-  BNP_NT_Pro_at_start = as.character(BNP_NT_Pro_at_start)
-)
-```
-
-
-## Trim extreme values for model fitting
-```{r trim}
-# trim LVAD time to 10 years
-combined_df = combined_df %>% mutate(
-    lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
-
-# trim other continuous variables to 1st and 99th percentiles
-trimOuter = function(x) {
-  q99 = quantile(x,.99,na.rm=T)
-  q01 = quantile(x,.01,na.rm=T)
+  # Adjust delisting time variables to censor at 6 weeks
+  # Depending on whether the week is even or odd, this translates to 4 or 5 weeks of follow up after delisting
+  # If candidates dies more than 4/5 weeks after delisting, they are censored
+  train_data = train_data %>% group_by(PX_ID) %>% 
+    
+    mutate(
+      # if we have full follow-up for the week, follow for censoring (floor)
+      time_until_censor_after_delisting = 
+        case_when(row_number() == n() & !is.na(time_until_censor_after_delisting) ~ 
+                    floor(pmax(0,removal_time + time_until_censor_after_delisting - interval_stop)/7)*7,
+                  T ~ NA),
+      # follow for death even w/o full week (ceiling)
+      time_until_death_after_delisting = 
+        case_when(row_number() == n() & !is.na(time_until_death_after_delisting) ~ 
+                    ceiling(pmax(0,removal_time + time_until_death_after_delisting - interval_stop)/7)*7,
+                  T ~ NA)) %>%
+    
+    fill(time_until_censor_after_delisting,time_until_death_after_delisting,.direction="downup") %>%
   
-  x[x>q99] = q99
-  x[x<q01] = q01
-  return(x)
-}
-combined_df = combined_df %>%
-  mutate_at(vars(albumin_at_start,bilirubin_at_start,eGFR_at_start,
-              sodium_at_start,cpo_at_start,api_at_start,papi_at_start),
-            trimOuter) %>%
-  group_by(BNP_NT_Pro_at_start) %>%
-  mutate_at(vars(BNP_at_start),trimOuter) %>% ungroup
+    # censor at 6 weeks
+    mutate(time_until_censor_after_delisting = case_when(
+      time_until_censor_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
+      time_until_censor_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
+      time_until_death_after_delisting > 28 & max(week) %% 2 == 0 ~ 28,
+      time_until_death_after_delisting > 35 & max(week) %% 2 != 0 ~ 35,
+      TRUE ~ time_until_censor_after_delisting
+    ),
+      # recode time to death as missing if censored
+      time_until_death_after_delisting = ifelse(!is.na(time_until_censor_after_delisting),NA,
+                                                time_until_death_after_delisting),
+      outcome = ifelse(!is.na(time_until_censor_after_delisting),0,outcome)
+      
+  )
+  
+  ## Determine delisting row and # of duplicates we need after delisting, until death or censoring
+  train_data = train_data %>% group_by(PX_ID) %>% mutate(
+    delisting = case_when(
+      (!is.na(time_until_death_after_delisting) | !is.na(time_until_censor_after_delisting)) & row_number() == n() ~ 1,
+      TRUE ~ 0)
+    ) %>% ungroup() %>% mutate(
+    duplicates_after_delisting = case_when(
+      delisting == 1 & time_until_death_after_delisting > 0 ~
+        time_until_death_after_delisting/7,
+      delisting == 1 & time_until_censor_after_delisting > 0 ~ 
+        time_until_censor_after_delisting/7,
+    TRUE ~ 0))
+  
+  ## repeat rows for the duplicates after delisting
+  # and recode interval_start, interval_stop
+  train_data = train_data %>%
+    slice(rep(row_number(), duplicates_after_delisting+1)) %>%
+    group_by(PX_ID) %>%
+    mutate(week=row_number()) %>%
+    group_by(PX_ID,duplicates_after_delisting) %>%
+    mutate(dup=row_number()-1) %>%
+    ungroup() %>%
+    mutate(interval_start=ifelse(duplicates_after_delisting>0,interval_start+7*dup,interval_start),
+           interval_stop=ifelse(duplicates_after_delisting>0,interval_stop+7*dup,interval_stop)) %>%
+    select(-dup)
+  
+  # code outcome for last row - now outcome is correct
+  train_data = train_data %>%
+    group_by(PX_ID) %>%
+    mutate(outcome = case_when(
+      row_number()==n() & outcome==1 ~ 1,
+      row_number()==n() & !is.na(time_until_death_after_delisting) & is.na(time_until_censor_after_delisting) ~ 1,
+      T ~ 0))
+  
+  # set prob_no_tx to 1 after delisting
+  train_data = train_data %>%
+    group_by(PX_ID) %>%
+    mutate(delisting2 = cumsum(delisting),
+           prob_no_tx = ifelse(delisting2>1,1,prob_no_tx))
+  
+  # First 4 weeks don't have 3 landmarks, so they have fewer duplicates
+  train_data = train_data %>% 
+    ungroup() %>%
+    mutate(
+    duplicate_amount = case_when(
+      week %in% c(1,2) ~ 0,
+      week %in% c(3,4) ~ 1,
+      TRUE ~ 2
+    ))
+    
+  # create duplicate rows
+  train_data = train_data %>%
+    slice(rep(row_number(), duplicate_amount+1)) %>% relocate(duplicate_amount, .after = CAN_LISTING_CTR_CD)
+  
+  combined_df = train_data %>% group_by(PX_ID, week) %>%
+    mutate(rown = row_number()) %>% ungroup() %>%
+    mutate(landmark = case_when(
+      week %in% c(1,2) ~ 1,
+      rown == 1 & week %in% c(3,4,5,6) ~ 1,
+      rown == 1 & !(week %in% c(1,2,3,4,5,6)) ~ ceiling(week/2) - 2,
+      rown == 2 & week %in% c(3,4,5,6) ~ 2,
+      rown == 2 & !(week %in% c(3,4,5,6)) ~ ceiling(week/2) - 1,
+      rown == 3 & week %in% c(5,6) ~ 3,
+      rown == 3 ~ ceiling(week/2)
+    )) %>% arrange(PX_ID, landmark) %>% 
+    relocate(landmark, .after = CAN_LISTING_CTR_CD) %>%
+    group_by(PX_ID,landmark) %>%
+    mutate(week_from_baseline = row_number(),
+           rem=first(delisting2)>1) %>% ungroup() %>% filter(!rem) %>% select(-rem)
+  
+  # Create weight variable based on prob_no_tx
+  combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
+    weight = 1/(cumprod(prob_no_tx))
+  ) %>% ungroup()
+  
+  # remove transplant weeks
+  combined_df = combined_df %>% filter(transplant == 0)
+  
+  combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
+    albumin_at_start = first(albumin),
+    bilirubin_at_start = first(bilirubin),
+    eGFR_at_start = first(eGFR),
+    sodium_at_start = first(sodium),
+    BNP_at_start = first(BNP),
+    BNP_NT_Pro_at_start = first(BNP_NT_Pro),
+    durable_LVAD_at_start = first(durable_LVAD),
+    short_mcs_ever_at_start = first(short_MCS_ever),
+    status_at_start = first(status),
+    cpo_at_start = first(cpo),
+    api_at_start = first(api),
+    papi_at_start = first(papi), 
+    lvad_years_at_start = first(lvad_years),
+    impella_at_start = first(impella),
+    iabp_at_start = first(iabp),
+    impella_ever_at_start = first(impella_ever),
+    iabp_ever_at_start = first(iabp_ever),
+    diagnosis_at_start = first(diagnosis)
+  ) %>% ungroup()
+  
+  # calculate numerator for stabilized weights
+  combined_df = combined_df %>% mutate(
+    prob_no_tx_start = 1 - predict(tx_model_first, newdata = combined_df, type = "response"),
+    prob_no_tx_start = ifelse(delisting2>1,1,prob_no_tx_start))
+  
+  # Create stabilized weight variable based on prob_no_tx and prob_no_tx_start
+  combined_df = combined_df %>% group_by(PX_ID, landmark) %>% mutate(
+    sweight = cumprod(prob_no_tx_start)/(cumprod(prob_no_tx))
+  ) %>% ungroup
+  
+  ## Recode BNP_NT_Pro as character
+  combined_df = combined_df %>% mutate(
+    BNP_NT_Pro_at_start = as.character(BNP_NT_Pro_at_start)
+  )
+  
+  # trim LVAD time to 10 years
+  combined_df = combined_df %>% mutate(
+      lvad_years_at_start = ifelse(lvad_years_at_start>10,10,lvad_years_at_start))
+  
+  # trim other continuous variables to 1st and 99th percentiles
+  trimOuter = function(x) {
+    q99 = quantile(x,.99,na.rm=T)
+    q01 = quantile(x,.01,na.rm=T)
+    
+    x[x>q99] = q99
+    x[x<q01] = q01
+    return(x)
+  }
+  combined_df = combined_df %>%
+    mutate_at(vars(albumin_at_start,bilirubin_at_start,eGFR_at_start,
+                sodium_at_start,cpo_at_start,api_at_start,papi_at_start),
+              trimOuter) %>%
+    group_by(BNP_NT_Pro_at_start) %>%
+    mutate_at(vars(BNP_at_start),trimOuter) %>% ungroup
+  
+  combined_df = combined_df %>%
+    mutate(api_at_start1.45 = ifelse(api_at_start > 1.45, api_at_start - 1.45, 0),
+           api_at_start6 = ifelse(api_at_start > 6, api_at_start - 6, 0),
+           cpo_at_start.8 = ifelse(cpo_at_start > .8, cpo_at_start - .8, 0),
+           lvad_years_at_start3 = ifelse(lvad_years_at_start > 3, lvad_years_at_start - 3, 0),
+           lvad_years_at_start5 = ifelse(lvad_years_at_start > 5, lvad_years_at_start - 5, 0),
+            eGFR_at_start30 = ifelse(eGFR_at_start > 30, eGFR_at_start - 30, 0),
+           albumin_at_start3.5 = ifelse(albumin_at_start > 3.5, albumin_at_start - 3.5, 0),
+           albumin_at_start4.25 = ifelse(albumin_at_start > 4.25, albumin_at_start - 4.25, 0),
+           eGFR_at_start40 = ifelse(eGFR_at_start > 40, eGFR_at_start - 40, 0),
+           eGFR_at_start90 = ifelse(eGFR_at_start > 90, eGFR_at_start - 90, 0),
+           log_bili_at_start = log(bilirubin_at_start + 1),
+           log_bili_at_start.47 = ifelse(log_bili_at_start > .47, log_bili_at_start - .47, 0),
+           log_BNP_at_start = ifelse(BNP_NT_Pro_at_start==0,log(BNP_at_start + 1),0),
+           log_BNP_at_start5.5 = ifelse(BNP_NT_Pro_at_start==0,
+                                     ifelse(log_BNP_at_start>5.5,log_BNP_at_start-5.5,0),0),
+           log_BNP_at_start7 = ifelse(BNP_NT_Pro_at_start==0,
+                                     ifelse(log_BNP_at_start>7,log_BNP_at_start-7,0),0),
+           log_BNP_NT_Pro_at_start = ifelse(BNP_NT_Pro_at_start==1,log(BNP_at_start + 1),0),
+           log_BNP_NT_Pro_at_start5 = ifelse(BNP_NT_Pro_at_start==1,
+                                             ifelse(log_BNP_NT_Pro_at_start>5,log_BNP_NT_Pro_at_start-5,0),0),
+           sodium_at_start137 = ifelse(sodium_at_start>137,sodium_at_start-137,0)
+           )
+  return(combined_df)
+})
 ```
 
-## Model selection
-With the stabilized weights, starting from the US-CRS 1.0 base model, fit the following models:
-
-   - Model A: US-CRS 1.0
-   
-   - Model B: US-CRS 1.0 + forward selection of nonlinear effects
-   
-   - Model C: US-CRS 1.0 + current Impella + current IABP
-   
-   - Model D: US-CRS 1.0 + ever Impella + ever IABP
-   
-   - Model E: US-CRS 1.0 with nonlinear effects (Model B) + forward selection of new main effects (Impella, IABP, time on LVAD, API, PAPi, CPO, diagnosis, CHD only)
-   
-   - Model F: Model E + forward selection of nonlinear effects for new variables
-   
-   - Model G: Model F + backward selection of 2-way interactions (between devices and labs, devices and selected hemodynamics)
-   
-   - Model H: Relaxed lasso
+## Fit models in each imputed dataset
 ```{r}
 ### MODEL C: US-CRS 1.0 + current impella + current iabp ###
-mortality_modelC = glm(
+Cmodels = lapply(1:5,function(i) {
+  mortality_modelC = glm(
   outcome ~ 
-    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start, data = combined_df, weights = sweight, family = binomial)
-AIC(mortality_modelC) # 72891.66
-length(coef(mortality_modelC)) # 12
+    albumin_at_start + log(bilirubin_at_start + 1) + eGFR_at_start + log(BNP_at_start + 1)*BNP_NT_Pro_at_start + sodium_at_start + durable_LVAD_at_start + short_mcs_ever_at_start + iabp_at_start + impella_at_start, data = combined_df_imp[[i]], weights = sweight, family = binomial)
+  return(mortality_modelC)
+}) 
 
 ### Model F ###
-
-# refit mortality_modelF with linear splines
-combined_df = combined_df %>%
-  mutate(api_at_start1.45 = ifelse(api_at_start > 1.45, api_at_start - 1.45, 0),
-         api_at_start6 = ifelse(api_at_start > 6, api_at_start - 6, 0),
-         cpo_at_start.8 = ifelse(cpo_at_start > .8, cpo_at_start - .8, 0),
-         lvad_years_at_start3 = ifelse(lvad_years_at_start > 3, lvad_years_at_start - 3, 0),
-         lvad_years_at_start5 = ifelse(lvad_years_at_start > 5, lvad_years_at_start - 5, 0),
-          eGFR_at_start30 = ifelse(eGFR_at_start > 30, eGFR_at_start - 30, 0),
-
-         )
-
-mortality_modelF_linear = glm(
+Fmodels = lapply(1:5,function(i) {
+  mortality_modelF_linear = glm(
   outcome ~ 
     factor(week_from_baseline) + 
     durable_LVAD_at_start +
@@ -404,9 +335,32 @@ mortality_modelF_linear = glm(
     BNP_NT_Pro_at_start +
     log_BNP_NT_Pro_at_start + log_BNP_NT_Pro_at_start5 + #log_BNP_NT_Pro_at_start5.5 +
     sodium_at_start + sodium_at_start137,
-  data = combined_df,
+  data = combined_df_imp[[i]],
   weights = sweight, family = binomial)
-mortality_modelF_linear
+  return(mortality_modelF_linear)
+})
+```
 
+## Pool the models (take coef average)
+Not going to summarize variance, which would not be correct without applying Rubin's rules with the robust variances.
+```{r}
+## Model C
+# pool models and save as a glm so we can use predict()
+pooled_modelC <- pool(Cmodels)
+modelC_tmp <- Cmodels[[1]]
+pooled_coefsC <- summary(pooled_modelC)$estimate
+names(pooled_coefsC) <- names(coef(modelC_tmp))
+modelC_tmp$coefficients <- pooled_coefsC
+
+## Model F
+# pool models and save as a glm so we can use predict()
+pooled_modelF <- pool(Fmodels)
+modelF_tmp <- Fmodels[[1]]
+pooled_coefsF <- summary(pooled_modelF)$estimate
+names(pooled_coefsF) <- names(coef(modelF_tmp))
+modelF_tmp$coefficients <- pooled_coefsF
+
+## save results
+save(pooled_coefsC,modelC_tmp,pooled_coefsF,modelF_tmp,file="MICE-mods.Rdata")
 ```
 
