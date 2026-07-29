@@ -421,11 +421,11 @@ auc_df$Date <- rep(test_dates, each = dim(table(auc_df$Model)))
 pval_df$Date <- rep(test_dates, each = choose(dim(table(auc_df$Model)),2))
 
 # plot results
-ggplot(auc_df %>% filter(model!="uscrs 1.0"), 
+auctest = ggplot(auc_df %>% filter(model!="uscrs 1.0"), 
        aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
-  geom_line(position = position_dodge(width = 24),alpha=.85) +
-  geom_point(position = position_dodge(width = 24),size=2.5) +
-  geom_errorbar(position = position_dodge(width = 24),width=15,alpha=.85) +
+  geom_line(position = position_dodge(width = 28)) + # ,alpha=.85
+  geom_errorbar(position = position_dodge(width = 28),width=15,linewidth=.6) + #  # ,alpha=.85
+  geom_point(position = position_dodge(width = 28),size=2.5) +
   labs(
     #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
     x = "Cross-section start date",
@@ -435,15 +435,7 @@ ggplot(auc_df %>% filter(model!="uscrs 1.0"),
   theme(
     panel.background = element_rect(fill = "white", color = "white"),
     plot.background = element_rect(fill = "white", color = NA), 
-    
-    # Increase font sizes
-    # plot.title = element_text(size = 18),
-    # axis.title.x = element_text(size = 16), 
-    # axis.title.y = element_text(size = 16),
-    
-    # axis.text = element_text(size = 10),
-    # legend.title = element_text(size = 14),
-    # legend.text = element_text(size = 11),
+
     axis.text.x = element_text(angle = 45, hjust = 1),
     
     text=element_text(size=12),
@@ -459,7 +451,11 @@ ggplot(auc_df %>% filter(model!="uscrs 1.0"),
   scale_color_viridis_d(direction=-1)
   # scale_color_manual(values = c("darkgrey","darkorange","darkblue")) #+
   # scale_linetype_manual(values = c("dashed","solid","solid"))
-ggsave("uscrs_auc_comparison-test.png", width = 7, height = 4, dpi = 300)
+ggsave(plot=auctest,filename="uscrs_auc_comparison-test.png", width = 7, height = 4, dpi = 300)
+# ggsave("uscrs_auc_comparison-test2.eps", plot = auctest, device = cairo_ps, width = 7, height = 4,dpi=300)
+postscript("uscrs_auc_comparison-test.eps", width = 7, height = 4, horizontal = FALSE, onefile = FALSE, paper = "special")
+print(auctest)
+dev.off()
 
 # range of AUC
 auc_df %>% filter(model!="uscrs 1.0") %>%
