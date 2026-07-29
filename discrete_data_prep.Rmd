@@ -343,35 +343,8 @@ df_final %>% group_by(PX_ID,train_test_split) %>%
 
 # Missing data and out-of-range values
 
-## Missingness before out of range fix
-```{r}
-table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final)
-
-# initial week, so that candidates appear only once
-table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final %>% group_by(PX_ID) %>% slice(1) %>% ungroup)
-```
-
 ## Recode out-of-range values
 ```{r}
-# out of range value flag
-df_final = df_final %>% mutate(
-  out_of_range_flag = case_when(
-    sodium < 100 | sodium > 200 ~ 1,
-    BNP_NT_Pro == 0 & BNP > 20000 ~ 1,
-    BNP_NT_Pro == 1 & BNP > 40000 ~ 1,
-    bilirubin > 50 ~ 1,
-    albumin < 0.5 | albumin > 9.9 ~ 1,
-    cardiac_output < 0.2 | cardiac_output > 15 ~ 1,
-    diastolicBP > 110 ~ 1,
-    systolicBP < 10 | systolicBP > 300 ~ 1,
-    PCWP > 100 ~ 1,
-    PASP < 10 | PASP > 120 ~ 1,
-    PADP > 110 ~ 1,
-    central_venous_pressure > 110 ~ 1,
-    creatinine < 0.1 | creatinine > 40 ~ 1,
-    TRUE ~ 0)
-)
-
 # set out of range values to missing
 df_final = df_final %>% mutate(
   sodium = ifelse(sodium < 100 | sodium > 200, NA, sodium),
@@ -394,13 +367,6 @@ df_final = df_final %>% mutate(
 
 ```
 
-## Data summary before imputation
-```{r}
-table1(~  albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + factor(out_of_range_flag) + factor(durable_LVAD) + factor(ECMO_ever) | train_test_split, data=df_final) # very low percent missing except w/ BNP
-summary(df_final$BNP[df_final$BNP_NT_Pro %in% 0]) # should be between 0 and 20000
-summary(df_final$BNP[df_final$BNP_NT_Pro %in% 1]) # should be between 0 and 40000
-```
-
 ## Body surface area calculation
 ```{r}
 # impute missing candidate values based on median in our cohort
@@ -408,48 +374,14 @@ cand_thor_impute = df_cand_thor %>%
   filter(PX_ID %in% df_final$PX_ID) %>%
   # summarise(med_hgt=median(CAN_HGT_CM,na.rm=T),
   #           med_wgt=median(CAN_WGT_KG,na.rm=T))
-  mutate(CAN_HGT_CM = ifelse(is.na(CAN_HGT_CM),median(CAN_HGT_CM,na.rm=T),CAN_HGT_CM),
-         CAN_WGT_KG = ifelse(is.na(CAN_WGT_KG),median(CAN_WGT_KG,na.rm=T),CAN_WGT_KG),
+  mutate(#CAN_HGT_CM = ifelse(is.na(CAN_HGT_CM),median(CAN_HGT_CM,na.rm=T),CAN_HGT_CM),
+         #CAN_WGT_KG = ifelse(is.na(CAN_WGT_KG),median(CAN_WGT_KG,na.rm=T),CAN_WGT_KG),
          bsa = 0.007184 * (CAN_HGT_CM ^ 0.725) * (CAN_WGT_KG ^ 0.425))
 
 # merge df_final w/ cand_thor
 df_final <- left_join(df_final, cand_thor_impute, by='PX_ID')
-df_final_preImpute = df_final
-```
 
-### Fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
-```{r}
-# fill missing arterial lactate, LDH, Hemoglobin, BNP, sodium, albumin, bilirubin, creatinine
-with(df_final, median(BNP[BNP_NT_Pro == '0'],na.rm=T))
-with(df_final, median(BNP[BNP_NT_Pro == '1'],na.rm=T))
-df_final %>% select(sodium,albumin,bilirubin,creatinine) %>% apply(.,2,median,na.rm=T)
-df_final <- df_final %>%
-  mutate(
-    arterial_lactate = ifelse(is.na(arterial_lactate), 1, arterial_lactate),
-    LDH = ifelse(is.na(LDH), 220, LDH),
-    HemoHemoglobin = case_when(
-      is.na(HemoHemoglobin) & CAN_GENDER == 'M' ~ 14.9,
-      is.na(HemoHemoglobin) & CAN_GENDER == 'F' ~ 13.3,
-      TRUE ~ HemoHemoglobin
-    ),
-    BNP_NT_Pro = case_when(
-      is.na(BNP_NT_Pro) ~ 0,
-      TRUE ~ BNP_NT_Pro
-    ),
-    BNP = case_when(
-      is.na(BNP) & BNP_NT_Pro == '0' ~ median(BNP[BNP_NT_Pro == '0'], na.rm = TRUE),
-      is.na(BNP) & BNP_NT_Pro == '1' ~ median(BNP[BNP_NT_Pro == '1'], na.rm = TRUE),
-      TRUE ~ BNP
-    ),
-    sodium = ifelse(is.na(sodium), median(sodium, na.rm = TRUE), sodium),
-    albumin = ifelse(is.na(albumin), median(albumin, na.rm = TRUE), albumin),
-    bilirubin = ifelse(is.na(bilirubin), median(bilirubin, na.rm = TRUE), bilirubin),
-    creatinine = ifelse(is.na(creatinine), median(creatinine, na.rm = TRUE), creatinine)
-  )
-```
-
-## Fill missing cardiac_output, central_venous_pressure, PASP, PADP, PCWP, systolicBP, diastolicBP, resting_HR
-```{r}
+# use BSA to calculate cardiac output
 df_final <- df_final %>%
   ungroup() %>%
   mutate(
@@ -457,46 +389,14 @@ df_final <- df_final %>%
       is.na(cardiac_output) & durable_LVAD == '1' ~ 2.5 * bsa,
       is.na(cardiac_output) & durable_LVAD != '1' ~ 2.2 * bsa,
       TRUE ~ cardiac_output
-    ), 
-    central_venous_pressure = case_when(
-      is.na(central_venous_pressure) & durable_LVAD == '1' ~ 10,
-      is.na(central_venous_pressure) & durable_LVAD != '1' ~ 12,
-      TRUE ~ central_venous_pressure
-    ),
-    PASP = case_when(
-      is.na(PASP) & durable_LVAD == '1' ~ 35,
-      is.na(PASP) & durable_LVAD != '1' ~ 38,
-      TRUE ~ PASP
-    ),
-    PADP = case_when(
-      is.na(PADP) & durable_LVAD == '1' ~ 15,
-      is.na(PADP) & durable_LVAD != '1' ~ 18,
-      TRUE ~ PADP
-    ),
-    PCWP = case_when(
-      is.na(PCWP) & durable_LVAD == '1' ~ 15,
-      is.na(PCWP) & durable_LVAD != '1' ~ 18,
-      TRUE ~ PCWP
-    ),
-    systolicBP = case_when(
-      is.na(systolicBP) & durable_LVAD == '1' ~ 100,
-      is.na(systolicBP) & durable_LVAD != '1' ~ 110,
-      TRUE ~ systolicBP
-    ),
-    diastolicBP = ifelse(is.na(diastolicBP), 80, diastolicBP),
-    resting_HR = ifelse(is.na(resting_HR), 8.5, resting_HR)
+    )
   )
 ```
 
-## Calculate eGFR, define short mcs ever
+## Define short mcs ever
 ```{r}
 df_final <- df_final %>%
-  mutate(eGFR = case_when(
-    CAN_GENDER == 'F' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.7), 1)^(-0.241)) *
-      (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing) * 1.012,
-    
-    CAN_GENDER == 'M' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.9), 1)^(-0.302)) *
-      (pmax((creatinine / 0.9), 1)^(-1.2)) * 0.9938^(age_at_listing)),
+  mutate(
     short_MCS_ever_old = 
          case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' ~ 1,
            TRUE ~ 0),
@@ -504,334 +404,6 @@ df_final <- df_final %>%
          case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' | CAN_ECMO %in% 1 ~ 1,
            TRUE ~ 0))
 with(df_final,table(short_MCS_ever_old,short_MCS_ever,useNA="ifany"))
-
-
-```
-
-## Define hemodynamics, impute missing values
-```{r}
-# define hemodynamics, impute missing values
-df_final <- df_final %>%
-  mutate(
-    cpo = (1/451) * cardiac_output * (((1/3)*systolicBP) + ((2/3)*diastolicBP)),
-    api = (systolicBP - diastolicBP) / PCWP,
-    papi = (PASP - PADP) / central_venous_pressure) %>%
-  
-  mutate(cpo = as.numeric(cpo),
-         api = as.numeric(api),
-         papi = as.numeric(papi)) %>%
-  mutate(api = case_when(PCWP == 0 ~ 1, T ~ api),
-         papi = case_when(
-            central_venous_pressure == 0 ~ 1,
-            papi < 1 & !is.na(papi) ~ 1,
-            TRUE ~ papi
-    ))
-```
-
-## Table 1, with missing data
-But out-of-bound values have been recoded as missing.
-```{r}
-## before imputation
-
-### supplemental table of time-varying data w/ missingness ###
-
-# restrict test set to rows beginning 9/1/23 or later
-with(df_final_preImpute,tapply(current_date,train_test_split,summary))
-table_data = df_final_preImpute %>%
-  filter(train_test_split %in% "train" | current_date >= test_date_start) %>%
-  mutate(
-    train_v_test_split = case_when(
-        current_date >= test2_date_start ~ "test",
-        train_test_split %in% "test" ~ "validation",
-        T ~ "train"),
-    short_MCS_ever = 
-         case_when(ECMO_ever == '1' | temp_surg_ever == '1' | BiVAD_no_discharge_ever == '1' | CAN_ECMO %in% 1 ~ 1,
-           TRUE ~ 0),
-    train_test_split = train_v_test_split
-    )
-with(table_data,tapply(current_date,train_test_split,summary))
-
-# relabel variables
-label(table_data$albumin) = "Albumin"
-units(table_data$albumin) = "g/dL"
-label(table_data$bilirubin) = "Bilirubin"
-units(table_data$bilirubin) = "mg/dL"
-label(table_data$creatinine) = "Creatinine"
-units(table_data$creatinine) = "mg/dL"
-label(table_data$sodium) = "Sodium"
-units(table_data$sodium) = "mEq/L"
-label(table_data$BNP) = "BNP"
-units(table_data$BNP) = "pg/mL"
-label(table_data$cardiac_output) = "Cardiac output"
-units(table_data$cardiac_output) = "L/min"
-label(table_data$diastolicBP) = "Diastolic BP"
-units(table_data$diastolicBP) = "mmHg"
-label(table_data$systolicBP) = "Systolic BP"
-units(table_data$systolicBP) = "mmHg"
-label(table_data$PCWP) = "PCWP"
-units(table_data$PCWP) = "mmHg"
-label(table_data$PASP) = "PASP"
-units(table_data$PASP) = "mmHg"
-label(table_data$PADP) = "PADP"
-units(table_data$PADP) = "mmHg"
-label(table_data$central_venous_pressure) = "Central venous pressure"
-units(table_data$central_venous_pressure) = "mmHg"
-table_data$out_of_range_flag = factor(table_data$out_of_range_flag)
-label(table_data$out_of_range_flag) = "Any data out of range"
-table_data$durable_LVAD = factor(table_data$durable_LVAD)
-label(table_data$durable_LVAD) = "Ever on durable LVAD"
-table_data$short_MCS_ever = factor(table_data$short_MCS_ever)
-label(table_data$short_MCS_ever) = "Ever on short-term MCS"
-table_data$train_test_split_label = factor(table_data$train_test_split,levels=c("train","validation","test"),labels=c("Training","Validation","Test"))
-table1(~ albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + short_MCS_ever + out_of_range_flag | train_test_split_label, overall=F, data=table_data) # very low percent missing except w/ BNP
-
-# summary of number of candidates
-table_data %>%
-  distinct(PX_ID) %>% nrow # 33097
-table_data %>%
-  distinct(PX_ID,train_test_split) %>%
-  count(train_test_split) %>%
-  mutate(prop=n/dim(table(table_data$PX_ID)))
-# train_test_split     n  prop
-#   <chr>            <int> <dbl>
-# 1 test              8256 0.249
-# 2 train            21859 0.660
-# 3 validation        7897 0.239
-
-# summary of number of rows per candidate
-table_data %>% group_by(PX_ID,train_test_split) %>%
-    mutate(rown=n()) %>%
-    ungroup %>%
-    # with(.,tapply(rown,train_test_split,summary))
-    with(.,tapply(rown,train_test_split,sd))
-table_data %>% group_by(PX_ID) %>%
-    mutate(rown=n()) %>%
-    ungroup %>%
-    pull(rown) %>% sd #summary  
-
-### table 1 ###
-
-## static data
-static_table = bind_rows(
-  table_data %>% group_by(PX_ID,train_test_split) %>% slice(1),
-  table_data %>% group_by(PX_ID) %>% slice(1) %>% mutate(train_test_split = "Overall"))
-static_table$train_test_split_label = factor(static_table$train_test_split,levels=c("train","validation","test","Overall"),labels=c("Training","Validation","Test","Overall"))
-label(static_table$age_at_listing) = "Age at listing"
-units(static_table$age_at_listing) = "years"
-label(static_table$CAN_GENDER) = "Birth sex"
-static_table$durable_LVAD = factor(static_table$durable_LVAD,labels=c("No","Yes"))
-label(static_table$durable_LVAD) = "Ever on durable LVAD"
-static_table$short_MCS_ever = factor(static_table$short_MCS_ever,labels=c("No","Yes"))
-label(static_table$short_MCS_ever) = "Ever on short-term MCS"
-static_table$status_label = factor(static_table$status,
-                                   levels=c(1:6,"inactive"),
-                                   labels=c(paste("Status",1:6),"Inactive"))
-label(static_table$status_label) = "Medical urgency status"
-table1(~ age_at_listing + CAN_GENDER + status_label + durable_LVAD + short_MCS_ever | train_test_split_label, 
-       data=static_table, overall = F)
-
-## save static_table (for Table 1) and table_data (for supplement) - data before imputation
-save(static_table,table_data,file="table1data.Rdata")
-
-
-## after imputation - could be for supplement
-table_data = df_final %>% 
-  filter(train_test_split %in% "train" | current_date >= test_date_start) %>%
-  mutate(train_v_test_split = case_when(
-    current_date >= test2_date_start ~ "test",
-    train_test_split %in% "test" ~ "validation",
-    T ~ "train"
-  ))
-label(table_data$albumin) = "Albumin"
-units(table_data$albumin) = "g/dL"
-label(table_data$bilirubin) = "Bilirubin"
-units(table_data$bilirubin) = "mg/dL"
-label(table_data$creatinine) = "Creatinine"
-units(table_data$creatinine) = "mg/dL"
-label(table_data$sodium) = "Sodium"
-units(table_data$sodium) = "mEq/L"
-label(table_data$BNP) = "BNP"
-units(table_data$BNP) = "pg/mL"
-label(table_data$cardiac_output) = "Cardiac output"
-units(table_data$cardiac_output) = "L/min"
-label(table_data$diastolicBP) = "Diastolic BP"
-units(table_data$diastolicBP) = "mmHg"
-label(table_data$systolicBP) = "Systolic BP"
-units(table_data$systolicBP) = "mmHg"
-label(table_data$PCWP) = "PCWP"
-units(table_data$PCWP) = "mmHg"
-label(table_data$PASP) = "PASP"
-units(table_data$PASP) = "mmHg"
-label(table_data$PADP) = "PADP"
-units(table_data$PADP) = "mmHg"
-label(table_data$central_venous_pressure) = "Central venous pressure"
-units(table_data$central_venous_pressure) = "mmHg"
-table_data$out_of_range_flag = factor(table_data$out_of_range_flag)
-label(table_data$out_of_range_flag) = "Any data out of range"
-table_data$durable_LVAD = factor(table_data$durable_LVAD)
-label(table_data$durable_LVAD) = "Ever on durable LVAD"
-table_data$short_MCS_ever = factor(table_data$short_MCS_ever)
-label(table_data$short_MCS_ever) = "Ever on short-term MCS"
-table_data$train_test_split_label = factor(table_data$train_v_test_split,levels=c("train","validation","test"),labels=c("Training","Validation","Test"))
-table1(~ albumin + bilirubin + creatinine + sodium + BNP + cardiac_output + diastolicBP + systolicBP + PCWP + PASP + PADP + central_venous_pressure  + durable_LVAD + short_MCS_ever + out_of_range_flag | train_test_split_label, data=table_data)
-```
-
-## Calculate wait times
-```{r}
-calculate_wait_times <- function(status_vector, current_date, status_start_1, status_start_2, status_start_3, status_start_4, status_start_5, status_start_6) {
-  n <- length(status_vector)
-  
-  # Convert to character if not already
-  status_vector <- as.character(status_vector)
-  
-  # Initialize wait time vectors
-  wait_1 <- numeric(n)
-  wait_2 <- numeric(n)
-  wait_3 <- numeric(n)
-  wait_4 <- numeric(n)
-  wait_5 <- numeric(n)
-  wait_6 <- numeric(n)
-  
-  # Flags to check if first time the status is encountered
-  first_time_1 <- TRUE
-  first_time_2 <- TRUE
-  first_time_3 <- TRUE
-  first_time_4 <- TRUE
-  first_time_5 <- TRUE
-  first_time_6 <- TRUE
-  
-  # Initialize cumulative wait times
-  cum_wait_1 <- 0
-  cum_wait_2 <- 0
-  cum_wait_3 <- 0
-  cum_wait_4 <- 0
-  cum_wait_5 <- 0
-  cum_wait_6 <- 0
-  
-  # Loop through each time point
-  for (i in 1:n) {
-    current_status <- status_vector[i]
-    
-    if (is.na(current_status) || current_status == "inactive") {
-      # Freeze wait times during inactive period, no accrual but keep the last values
-      wait_1[i] <- cum_wait_1
-      wait_2[i] <- cum_wait_2
-      wait_3[i] <- cum_wait_3
-      wait_4[i] <- cum_wait_4
-      wait_5[i] <- cum_wait_5
-      wait_6[i] <- cum_wait_6  # Ensure that the last value of wait_6 is retained
-    } else {
-      # Increment wait times only when the current status allows
-      
-      # Status 1 logic
-      if (current_status == "1") {
-        if (first_time_1) {
-          cum_wait_1 <- as.numeric(current_date[i] - status_start_1[i])
-          first_time_1 <- FALSE
-        } else {
-          cum_wait_1 <- cum_wait_1 + 7
-        }
-      }
-      
-      # Status 2 logic
-      if (current_status <= "2") {
-        if (first_time_2) {
-          cum_wait_2 <- as.numeric(current_date[i] - status_start_2[i])
-          first_time_2 <- FALSE
-        } else {
-          cum_wait_2 <- cum_wait_2 + 7
-        }
-      }
-      
-      # Status 3 logic
-      if (current_status <= "3") {
-        if (first_time_3) {
-          cum_wait_3 <- as.numeric(current_date[i] - status_start_3[i])
-          first_time_3 <- FALSE
-        } else {
-          cum_wait_3 <- cum_wait_3 + 7
-        }
-      }
-      
-      # Status 4 logic
-      if (current_status <= "4") {
-        if (first_time_4) {
-          cum_wait_4 <- as.numeric(current_date[i] - status_start_4[i])
-          first_time_4 <- FALSE
-        } else {
-          cum_wait_4 <- cum_wait_4 + 7
-        }
-      }
-      
-      # Status 5 logic
-      if (current_status <= "5") {
-        if (first_time_5) {
-          cum_wait_5 <- as.numeric(current_date[i] - status_start_5[i])
-          first_time_5 <- FALSE
-        } else {
-          cum_wait_5 <- cum_wait_5 + 7
-        }
-      }
-      
-      # Status 6 logic
-      if (current_status == "6") {  # Only accrue when status is exactly 6
-        if (first_time_6) {
-          cum_wait_6 <- as.numeric(current_date[i] - status_start_6[i])
-          first_time_6 <- FALSE
-        } else {
-          cum_wait_6 <- cum_wait_6 + 7
-        }
-      }
-      
-      # Assign cumulative wait times to the wait vectors
-      wait_1[i] <- cum_wait_1
-      wait_2[i] <- cum_wait_2
-      wait_3[i] <- cum_wait_3
-      wait_4[i] <- cum_wait_4
-      wait_5[i] <- cum_wait_5
-      wait_6[i] <- cum_wait_6
-    }
-  }
-  
-  # Return the wait time vectors as a data frame
-  data.frame(wait_1, wait_2, wait_3, wait_4, wait_5, wait_6)
-}
-
-
-
-df_final <- df_final %>%
-  group_by(PX_ID) %>%
-  do({
-    wait_times <- calculate_wait_times(
-      status_vector = as.character(.$status),
-      current_date = .$current_date,
-      status_start_1 = .$status_start_1,
-      status_start_2 = .$status_start_2,
-      status_start_3 = .$status_start_3,
-      status_start_4 = .$status_start_4,
-      status_start_5 = .$status_start_5,
-      status_start_6 = .$status_start_6
-    )
-    cbind(., wait_times)  # Combine the original dataframe with the new wait times
-  }) %>%
-  ungroup()  # Ungroup after processing
-
-# check that wait time freezes when inactive
-df_final  %>% select(PX_ID, status, interval_start, interval_stop, wait_1, wait_2, wait_3, wait_4, wait_5, wait_6)
-```
-
-## Durable LVAD checks
-```{r}
-df_final %>% select(PX_ID, current_date, durable_LVAD, durable_lvad_implant_dt, status, status_criteria) %>% filter(!is.na(durable_lvad_implant_dt) & durable_LVAD == 1 & current_date > "2018-10-18" & current_date < durable_lvad_implant_dt) %>% arrange(PX_ID)
-
-df_final %>% filter(PX_ID == 654863 & durable_LVAD == 1)
-
-table(df_final$status_criteria)
-df_final %>% filter(status_criteria == "CriteriaLvadSupport")
-df_final %>% mutate(durable_lvad_implant_dt = as.Date(durable_lvad_implant_dt)) %>% filter(status_criteria == "CriteriaLvadSupport" & !(status %in% c(4,6, "inactive"))) %>% select(PX_ID, status, durable_LVAD, current_date,  durable_lvad_implant_dt)
-
-df_final %>% filter(durable_LVAD == 1 & is.na(durable_lvad_implant_dt)) %>% select(PX_ID, status, status_criteria, current_date, durable_lvad_implant_dt, durable_LVAD)
-
 ```
 
 ## Calculate durable LVAD time
@@ -848,6 +420,305 @@ df_final = df_final %>% mutate(
 )
 df_final  %>% filter(durable_LVAD == 1) %>% select(durable_lvad_implant_dt, current_date, can_listing_dt, durable_lvad_time)
 
+
+### from mortality_model_data.Rmd
+### fix death to be pretransplant only and just one row ###
+
+# fix extra rows w/ outcome=1
+table(df_final$outcome)
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(outcome = case_when(
+    row_number()==n() & outcome==1 ~ 1,
+    T ~ 0))
+table(df_final$outcome)
+
+# recode outcome as 0 if patient received transplant
+## want outcome to be an indicator of pretx death
+df_final = df_final %>%
+  group_by(PX_ID) %>%
+  mutate(any_tx=any(transplant==1)) %>%
+  ungroup() %>%
+  mutate(outcome = ifelse(any_tx,0,outcome))
+table(df_final$outcome)
+
+# date for end of interval
+# df_final = df_final %>% mutate(
+#   current_date_end = current_date + pmin(last_active_date - current_date, 7)
+# )
+
+# time on LVAD at current_date
+df_final = df_final %>% mutate(
+  durable_LVAD = case_when(
+    durable_lvad_time > 0 ~ 1,
+    T ~ durable_LVAD
+  ),
+  durable_lvad_time = case_when(
+    durable_LVAD == 1 & durable_lvad_implant_dt > current_date ~ as.numeric(current_date - as.Date(can_listing_dt)),
+    TRUE ~ durable_lvad_time
+  ),
+  lvad_years = durable_lvad_time/365.25
+)
+```
+
+## Bring in justification form data
+```{r excep}
+library(haven)
+
+## note: only works for Grace
+curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor/ThoracicRegistration"
+just_form_hr = read_sas(here::here(curr_data_release, "JustFormHR.sas7bdat"), NULL) %>%  
+    zap_formats() %>% zap_labels()
+just_form_hr_data_link = 
+  read_sas(here::here(curr_data_release, "JustFormHRDataLink.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+risk_strat_data_hr = 
+  read_sas(here::here(curr_data_release, "RiskStratDataHR.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+status_just_episode = 
+  read_sas(here::here(curr_data_release, "StatusJustEpisode.sas7bdat"), NULL) %>%
+  zap_formats() %>% zap_labels()
+just_form_hr_stat1 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat1.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+just_form_hr_stat2 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat2.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+just_form_hr_stat3 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat3.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+just_form_hr_stat4 = 
+  read_sas(here::here(curr_data_release, "JustFormHRStat4.sas7bdat"), NULL) %>%  
+  zap_formats() %>% zap_labels()
+thor_support_device = 
+    read_sas(here::here(curr_data_release, "ThorSupportDevice.sas7bdat"), NULL) %>% 
+    zap_formats() %>% zap_labels()
+
+# MOLLY ADDED - data loading
+# just_form_hr = read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHR.sas7bdat") %>%  
+#     zap_formats() %>% zap_labels()
+# just_form_hr_data_link = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRDataLink.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# risk_strat_data_hr = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/RiskStratDataHR.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# status_just_episode = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/StatusJustEpisode.sas7bdat") %>%
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat1 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat1.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat2 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat2.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat3 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat3.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# just_form_hr_stat4 = 
+#   read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/JustFormHRStat4.sas7bdat") %>%  
+#   zap_formats() %>% zap_labels()
+# thor_support_device = 
+#     read_sas("C:/Users/mwhite10/Downloads/Supplement2603/Thoracic Registration/ThorSupportDevice.sas7bdat") %>% 
+#     zap_formats() %>% zap_labels()
+
+# join everything
+justdat = inner_join(risk_strat_data_hr %>% select(px_id,wl_id,WlregAuditId),
+                     just_form_hr_data_link %>% select(WlregAuditId,JustId),
+                     by="WlregAuditId") %>%
+  inner_join(.,
+             status_just_episode %>% select(JustId,BeginDate,EndDate),
+             by="JustId") %>%
+  inner_join(.,
+             just_form_hr %>% select(JustId,RequestedCandStatCd,Exception,ThorSupportDevicePrimary,ThorSupportDeviceSecondary),
+             by="JustId") %>%
+  left_join(.,
+             bind_rows(just_form_hr_stat2 %>% select(JustId,CriteriaIabpSupport),
+                       just_form_hr_stat3 %>% select(JustId,CriteriaIabpSupport)),
+             by="JustId") %>%
+  left_join(.,thor_support_device %>% select(DeviceId,DeviceTypeId,VadBrandId,TahBrandId,PercuBrandId,VentricularSupportId,ImplantDt,OtherSpecify),
+            by=c("ThorSupportDevicePrimary"="DeviceId")) %>%
+  mutate(BrandId = coalesce(VadBrandId,TahBrandId,PercuBrandId)) %>%
+  # EndDate is missing for people who were still at that status when data were pulled
+  mutate(EndDate = case_when(is.na(EndDate) ~ max(EndDate,na.rm=T),T ~ EndDate))
+
+# look at Impellas in OtherSpecify
+thor_support_device %>% filter(grepl("imp",OtherSpecify,ignore.case=T)) %>% count(OtherSpecify) %>% print(n=100)
+
+# special dataset for iabp and impella
+# 237=Impella CP, 238=Impella RP, 239=Impella 5.5, 225=Impella Recover 2.5, 226=Impella Recover 5.0
+justdat_device = justdat %>%
+  mutate(iabp = case_when(DeviceTypeId %in% 8 ~ 1,T ~ 0),
+         impella = case_when(BrandId %in% c(237,238,239,225,226) ~ 1,T ~ 0),
+         impella = case_when(grepl("imp",OtherSpecify,ignore.case=T) ~ 1,T ~ impella)) %>%
+  arrange(px_id,BeginDate,EndDate) %>%
+  group_by(px_id) %>%
+  mutate(iabp_ever = ifelse(cumsum(iabp)>0,1,0),
+         impella_ever = ifelse(cumsum(impella)>0,1,0)) %>%
+  mutate(rown=row_number()==n()) %>%
+  ungroup() %>%
+  # define a BeginDate-EndDate range until the next form (including inactive time and status 5-6)
+  mutate(EndDate = case_when(!rown ~ lead(BeginDate),
+                             T ~ EndDate))
+  
+# keep justification forms for patients in study, on current_date (end of day)
+justdat_join = justdat %>% right_join(.,df_final %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>%
+  mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% 
+  filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct # note: distinct not needed
+
+# keep devices from forms for patients in study, on current_date (end of day)
+justdat_device_join = justdat_device %>% right_join(.,df_final %>% select(PX_ID,current_date),by=c("px_id"="PX_ID")) %>%
+  mutate(current_date_yms=current_date+days(1)-seconds(1)) %>% 
+  filter(current_date_yms>=BeginDate,current_date_yms<=EndDate) %>% distinct # note: distinct not needed
+justdat_device_join %>% count(iabp,iabp_ever,impella,impella_ever)
+
+# join justification forms to df_final
+names(justdat_join)[names(justdat_join) %in% names(df_final)]
+names(justdat_device_join)[names(justdat_device_join) %in% names(df_final)]
+df_final2 = df_final %>% rename(JustId_old=JustId,RequestedCandStatCd_old=RequestedCandStatCd,Exception_old=Exception) %>%
+  left_join(.,justdat_join,by=c("PX_ID"="px_id","current_date")) %>%
+  left_join(.,justdat_device_join %>% select(px_id,current_date,iabp,impella,iabp_ever,impella_ever),
+            by=c("PX_ID"="px_id","current_date"))
+
+## sanity checks
+nrow(df_final2);nrow(df_final)
+df_final2 %>% count(status,RequestedCandStatCd)
+df_final2 %>% count(status,Exception)
+df_final2 %>% count(iabp,impella)
+df_final2 %>% count(iabp,iabp_ever,impella,impella_ever)
+df_final2 %>% filter(is.na(iabp),is.na(impella)) %>% count(status)
+
+# people missing both iabp and impella are people w/ no previous Status 1-4 form
+justdat %>% right_join(.,df_final2 %>% filter(is.na(iabp),is.na(impella)) %>%
+                                select(PX_ID,current_date_yms),by=c("px_id"="PX_ID")) %>%
+  filter(BeginDate <= current_date_yms) %>%
+  nrow
+
+# recode missing iabp and impella as 0
+df_final2 = df_final2 %>%
+  mutate(iabp=ifelse(is.na(iabp),0,iabp),
+         iabp_ever=ifelse(is.na(iabp_ever),0,iabp_ever),
+         impella=ifelse(is.na(impella),0,impella),
+         impella_ever=ifelse(is.na(impella_ever),0,impella_ever))
+df_final2 %>% count(iabp,iabp_ever,impella,impella_ever)
+df_final2 %>% count(status,iabp,impella) %>% print(n=30) # carry forward into next status, even if inactive, 5, or 6
+
+# save df_final2 as df_final
+df_final=df_final2
+rm(df_final2)
+rm(just_form_hr,just_form_hr_data_link,risk_strat_data_hr,status_just_episode,just_form_hr_stat1,just_form_hr_stat2,just_form_hr_stat3,just_form_hr_stat4,thor_support_device,justdat,justdat_device,justdat_join,justdat_device_join)
+gc()
+```
+
+# Calculate diagnosis group variables
+```{r diag}
+# diagnosis group - CHD
+  ## the four big ones including CHD
+  # restrictive cardiomyopathy are ineligible to receive certain devices
+# definitely include retransplant
+table(df_final$diagnosis,useNA="ifany")
+
+# read in SAF to get CAN_DGN
+## only works for Grace
+curr_data_release = "//srtr-fs-p01/SAF/Internal/SAF2512/thor"
+df_cand_thor <- haven::read_sas(file.path(curr_data_release,'cand.sas7bdat'),
+                                  col_select=c(PX_ID, CAN_DGN, CAN_DGN2))
+# MOLLY ADDED - read in SAF
+# df_cand_thor <- haven::read_sas("C:/Users/mwhite10/Downloads/pubsaf2603/cand_thor.sas7bdat",
+#                                   col_select=c(PX_ID, CAN_DGN, CAN_DGN2))
+df_final = left_join(df_final,df_cand_thor,by="PX_ID")
+
+# look at CAN_DGN for each diagnosis
+df_final %>% filter(CAN_DGN %in% c(1208,1209,1100,1199)) %>% count(diagnosis,CAN_DGN)
+
+# recode 1100 and 1199 as Re-Transplant
+df_final = df_final %>%
+  mutate(diagnosis = case_when(CAN_DGN %in% c(1100,1199) ~ "Re-Transplant",
+                               T ~ diagnosis))
+table(df_final$diagnosis,useNA="ifany")
+
+# recode 1208 and 1209 as Dilated_CM
+df_final = df_final %>%
+  mutate(diagnosis = case_when(CAN_DGN %in% c(1208,1209) ~ "Dilated_CM",
+                               T ~ diagnosis))
+table(df_final$diagnosis,useNA="ifany")
+
+# look at CAN_DGN for each diagnosis
+df_final %>% filter(CAN_DGN %in% c(1208,1209,1100,1199)) %>% count(diagnosis,CAN_DGN)
+
+# confirm no missing CAN_DGN being coded as Other
+df_final %>% filter(is.na(CAN_DGN)) %>% nrow
+
+```
+
+## Split data into training / testing sets
+All 1-week intervals that began between 1/1/2019 and 6/30/2023, for candidates listed by 5/15/2023, were retained in the model training data, while all other 1-week intervals were held out in validation and test sets for model assessment.
+```{r}
+# confirm listing dates and current dates
+with(df_final,tapply(can_listing_dt,train_test_split,summary))
+with(df_final,tapply(current_date,train_test_split,summary))
+
+#temporally split training and testing sets
+df_final_FULL = df_final
+df_final = df_final %>% filter(train_test_split == "train")
+```
+
+## MICE
+```{r}
+## need to impute labs and hemos:
+df_final %>% select(albumin,bilirubin,sodium,BNP,BNP_NT_Pro,
+                    durable_LVAD,short_MCS_ever,status,
+                    CAN_GENDER,creatinine,age_at_listing,
+                    cardiac_output,systolicBP,diastolicBP,PCWP,
+                    PASP,PADP,central_venous_pressure,
+                    impella,iabp,impella_ever,iabp_ever,diagnosis,lvad_years) %>%
+  apply(.,2,function(col) sum(is.na(col)))
+
+
+
+
+
+```
+
+
+## Calculate eGFR
+```{r}
+df_final <- df_final %>%
+  mutate(eGFR = case_when(
+    CAN_GENDER == 'F' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.7), 1)^(-0.241)) *
+      (pmax((creatinine / 0.7), 1)^(-1.2)) * 0.9938^(age_at_listing) * 1.012,
+    
+    CAN_GENDER == 'M' & !is.na(creatinine) ~ 142 * (pmin((creatinine / 0.9), 1)^(-0.302)) *
+      (pmax((creatinine / 0.9), 1)^(-1.2)) * 0.9938^(age_at_listing))
+  )
+```
+
+## Define hemodynamics
+```{r}
+# define hemodynamics
+df_final <- df_final %>%
+  mutate(
+    cpo = (1/451) * cardiac_output * (((1/3)*systolicBP) + ((2/3)*diastolicBP)),
+    api = (systolicBP - diastolicBP) / PCWP,
+    papi = (PASP - PADP) / central_venous_pressure) %>%
+  
+  mutate(cpo = as.numeric(cpo),
+         api = as.numeric(api),
+         papi = as.numeric(papi)) %>%
+  mutate(api = case_when(PCWP == 0 ~ 1, T ~ api),
+         papi = case_when(
+            central_venous_pressure == 0 ~ 1,
+            papi < 1 & !is.na(papi) ~ 1,
+            TRUE ~ papi
+    ))
+
+
+# fix API when negative (recode as missing)
+summary(df_final$api)
+df_final = df_final %>%
+  mutate(api = ifelse(api<0,NA,api),
+         api = ifelse(is.na(api),median(api,na.rm=T),api))
+summary(df_final$api)
 ```
 
 ## Save discrete time data
@@ -857,70 +728,5 @@ dim(table(df_final$PX_ID)) # 33961
 table(df_final$transplant) # 23928 
 
 # save dataset
-save("df_final", file =  "discrete_final_data.RData")
+save("df_final", file =  "discrete_final_data_MICE.RData")
 ```
-
-## Durable LVAD summary
-```{r}
-
-df_final = df_final %>%
-  group_by(PX_ID) %>% # Group by PX_ID
-  mutate(
-    first_lvad_date = min(current_date[status_criteria == "CriteriaLvadSupport"], na.rm = TRUE) # Find the first date
-  ) %>%
-  ungroup() 
-
-filtered = df_final %>%
-  group_by(PX_ID) %>%
-  filter(any(status_criteria == "CriteriaLvadSupport")) %>% mutate(
-  lvad_time_test = first_lvad_date - max(as.Date(can_listing_dt), durable_lvad_implant_dt, na.rm = T) 
-)
-
-ggplot(filtered, aes(x = lvad_time_test)) +
-  geom_histogram(binwidth = 5, fill = "blue", color = "black", alpha = 0.7) +
-  labs(title = "Histogram of LVAD Time Test",
-       x = "LVAD Time Test",
-       y = "Frequency") +
-  theme_minimal()
-
-filtered = as.data.frame(filtered)
-base::summary(filtered$lvad_time_test)
-?summary
-variable = filtered$lvad_time_test
-filtered = filtered %>% select(PX_ID, lvad_time_test) %>%
-  distinct()
-summary(as.numeric(variable))
-as.numericvariable
-max(df_final$lvad_time_test, na.rm = T)
-
-filtered %>% filter(!is.na(lvad_time_test)) %>% select(PX_ID, current_date, can_listing_dt ,durable_lvad_implant_dt, lvad_time_test)
-
-df_final %>%
-  group_by(PX_ID) %>%
-  filter(any(status_criteria) == "CriteriaLvadSupport")
-
-df_final %>% filter(status_criteria == "CriteriaLvadSupport")
-
-df_final %>% filter(PX_ID == 542942 & status_criteria == "CriteriaLvadSupport")
-
-filtered %>% select(lvad_time_test)
-filtered %>% filter(as.numeric(lvad_time_test) == 77)
-
-df_final %>% filter(PX_ID == 654863) %>% select(PX_ID, status, current_date, durable_LVAD, can_listing_dt, durable_lvad_implant_dt, first_lvad_date, status_criteria)
-
-df_final %>% filter(as.numeric(lvad_time_test) > 0 & current_date > "2019-01-01")
-```
-
-```{r}
-df %>% filter(is.na(durable_lvad_implant_dt) & durable_LVAD == 1) %>% count(PX_ID)
-df %>% filter(PX_ID == 1107906) %>% select(durable_LVAD, durable_lvad_implant_dt, status)
-```
-
-
-
-
-
-
-
-
-
