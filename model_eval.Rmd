@@ -102,9 +102,9 @@ auc_df$Date <- rep(test_dates, each = dim(table(auc_df$Model)))
 # plot results
 ggplot(auc_df,
        aes(x = Date, y = AUC, ymin = lower, ymax = upper, color = Model, shape=Model)) +
-  geom_line(position = position_dodge(width = 28)) + # ,alpha=.85
-  geom_errorbar(position = position_dodge(width = 28),width=15,linewidth=.6) + #  # ,alpha=.85
-  geom_point(position = position_dodge(width = 28),size=2.5) +
+  geom_line(position = position_dodge(width = 32),alpha=.85) + # ,alpha=.85
+  geom_errorbar(position = position_dodge(width = 32),width=15,,alpha=.85) + #  # 
+  geom_point(position = position_dodge(width = 32),size=2.5) +
   labs(
     #title = "Figure 1: AUC of US-CRS 2.0 compared to\nstatus quo (6-status with waiting time tiebreakers)",
     x = "Cross-section start date",
@@ -126,7 +126,8 @@ ggplot(auc_df,
     labels = format(test_dates, "%m/%d/%Y"),
     minor_breaks=F
   ) +
-  scale_shape_manual(values=c(16,17,15,12)) +
-  scale_color_viridis_d(direction=-1)
+  scale_shape_manual(values=c(15,18,12,9)) +
+  scale_color_manual(values=c("#31688EFF","#1FA187FF","#440154FF","#4AC16DFF"))
+ggsave("uscrs_auc_comparison-MICE.png", width = 7, height = 4, dpi = 300)
 
 ```
