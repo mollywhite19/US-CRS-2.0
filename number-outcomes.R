@@ -2,6 +2,7 @@
 
 ## training data
 base::load("mortality_model_train_data.Rdata")
+combined_df %>% ungroup %>% distinct(PX_ID,outcome) %>% count(outcome)
 combined_df %>% ungroup %>% distinct(PX_ID,outcome,CAN_REM_CD) %>% count(outcome,CAN_REM_CD %in% 13)
 
 
