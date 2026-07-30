@@ -3564,6 +3564,49 @@ ggplot(iabp_sankey, aes(x = x,
   scale_x_discrete(labels = c("uscrs_6_status" = "6-Status US-CRS:\nNo IABP","uscrs_new_6status" = "6-Status US-CRS:\nAdd IABP"))
 ggsave("iabp_sankey.png", width = 7, height = 7, dpi=300)
 
+# make Sankey plot for dLVAD
+lvad_sankey <- pred_data %>%
+  ungroup() %>%
+  filter(max_device=="LVAD",status!="inactive") %>%
+  group_by(PX_ID) %>% slice(1) %>% ungroup() %>%
+  select(status,uscrs_6_status) %>%
+  make_long(status,uscrs_6_status)
+lvad_plot <- lvad_sankey %>%
+  dplyr::group_by(x, node) %>%
+  tally()
+lvad_sankey <- merge(lvad_sankey,
+                          lvad_plot,
+                          by.x = c('x', 'node'),
+                          by.y = c('x', 'node'),
+                          all.x = TRUE) %>%
+  mutate(node = factor(node, levels = node_order),
+         next_node = factor(next_node, levels = node_order))
+
+
+# make Sankey plot for LVAD: current 6-status vs 6-status US-CRS
+ggplot(lvad_sankey, aes(x = x,
+                     next_x = next_x,
+                     node = node,
+                     next_node = next_node,
+                     fill = factor(node),
+                     label = paste0(node, " = ", n))) + 
+  geom_sankey(flow.alpha = 0.5,
+                      node.color = "black",
+                      show.legend = TRUE) + 
+  geom_sankey_label(size = 4,
+                             color = "black",
+                             fill = "white") + 
+  scale_fill_manual(values = default_colors) + 
+  theme_bw() + 
+  theme(legend.position = 'none',
+        text=element_text(size=14),
+        axis.title = element_blank(),
+                 axis.text.y = element_blank(),
+                 axis.ticks = element_blank(),
+                 panel.grid = element_blank()) + 
+  scale_x_discrete(labels = c("status" = "Current 6-Status",
+                              "uscrs_6_status" = "6-Status US-CRS"))
+
 ```
 
 

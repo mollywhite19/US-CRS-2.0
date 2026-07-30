@@ -17,7 +17,7 @@
 # bring in mortality models
 ## from mortality_model_data.Rmd
 base::load("mortality-model-options.Rdata")
-base::load("mortality-modelE-linear.Rdata")
+base::load("mortality-modelE-linear.Rdata") # not using Complex predictions anymore
 
 # bring in discrete-time data before training/valid/test split
 ## from mortality_model_data.Rmd
@@ -126,10 +126,10 @@ mrdat = mrdatC %>%
 # select PX_ID, current_date, USCRS 2.0 log hazards
 mrdat0 = mrdat %>%
   select(PX_ID,current_date,log_haz_dth_modC,prob_outcome_6wk_modC,prob_surv_6wk_modC,
-         log_haz_dth_modE,prob_outcome_6wk_modE,prob_surv_6wk_modE)
+         log_haz_dth_modE,prob_outcome_6wk_modE,prob_surv_6wk_modE,durable_LVAD)
 summary(mrdat0$log_haz_dth_modC) # no missing, all negative bc probability
 summary(mrdat0$log_haz_dth_modE) # no missing, all negative bc probability
 
 # save data for match run analysis
 mrdat = mrdat0
-save(mrdat,file="mrdat.Rdata")
+save(mrdat,file="mrdat-LVAD.Rdata")
