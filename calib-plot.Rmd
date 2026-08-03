@@ -172,6 +172,36 @@ test_data = test_data %>%
 table(test_data$transplant,test_data$delisting) # quick check
 ```
 
+## Add US-CRS 50-point score (Model C) to test set
+```{r}
+base::load("mrdat.Rdata") # from match-run-data.R
+
+for(mod in c("modC")) { # , "modE"
+  log_haz_col <- mrdat[[paste0("log_haz_dth_", mod)]]
+
+  # Exponentiate to get hazard
+  haz <- exp(log_haz_col)
+
+  # Cap at 99th percentile
+  haz_99 <- quantile(haz, 0.99)
+  haz_capped <- pmin(haz, haz_99)
+
+  # Convert to log odds
+  log_odds <- log(haz_capped / (1 - haz_capped))
+
+  # Scale to 1-50
+  min_log_odds <- min(log_odds)
+  max_log_odds <- max(log_odds)
+}
+rm(log_haz_col,haz,haz_capped,log_odds)
+
+eight_sets_test_modC = eight_sets_test_modC %>%
+  mutate(haz_dth_modC = pmin(haz_dth_nowk,haz_99),
+         log_odds = log(haz_dth_modC / (1 - haz_dth_modC)),
+         uscrs2 = round(1 + 49 * (log_odds - min_log_odds) / (max_log_odds - min_log_odds)))
+
+```
+
 ## Set up validation and test data for calibration analysis
 
 Join `test_data` to the eight calendar cross-sections and include 6 weeks of follow-up per PX_ID per cross-section. Calculate IPW.
@@ -189,7 +219,7 @@ eight_sets_valid = full_join(eight_sets_valid_modA %>% select(PX_ID,current_date
 names(eight_sets_valid)
 
 # do the same for eight_sets_test
-eight_sets_test = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,prob_outcome_6wk_modC=prob_outcome_6wk),
+eight_sets_test = full_join(eight_sets_test_modC %>% select(PX_ID,current_date,uscrs2,prob_outcome_6wk_modC=prob_outcome_6wk),
                        eight_sets_test_modF %>% select(PX_ID,current_date,prob_outcome_6wk_modF=prob_outcome_6wk))
 summary(eight_sets_test$prob_outcome_6wk_modC)
 summary(eight_sets_test$prob_outcome_6wk_modF)
@@ -422,6 +452,56 @@ ggplot(calib_status_long,
 # ggsave("calib-by-status-NEW.png",width=7.5,height=6.5)
 ```
 
+## Calibration of 50-point score
+```{r}
+calibdat50pt = makeCalibData(eight_sets_test_long,20,"uscrs2")
+ggplot(calibdat50pt,aes(x=exp,y=obs)) +
+  # geom_abline(intercept=0,slope=1,color="darkgrey") +
+  geom_errorbar(aes(ymin=lower,ymax=upper)) +
+  geom_point(size=2,alpha=.8) + 
+  scale_x_continuous(limits=c(0,50)) +
+  scale_y_continuous(limits=c(0,0.25),
+                     oob = scales::rescale_none) +
+  # # coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  # facet_zoom(xlim=c(0,.03),ylim=c(0,.03),zoom.size=1,show.area=F) +  
+  theme_bw() +
+  theme(text=element_text(size=14)) +
+  labs(y="Observed 6-week mortality probability",x="US-CRS 2.0 50-Point")
+```
+
+
+## Calibration for score 50
+```{r calib50}
+# what number and percent w/ score 50
+table(eight_sets_test$uscrs2)["50"]
+prop.table(table(eight_sets_test$uscrs2))["50"]
+
+# some checks
+eight_sets_test_long %>% distinct(PX_ID,grp) %>% nrow
+eight_sets_test_long %>% distinct(PX_ID,grp,uscrs2) %>% nrow
+eight_sets_test_long %>% distinct(PX_ID,grp,prob_outcome_6wk_modC) %>% nrow
+
+# make calibration plot
+calibdat50 = makeCalibData(eight_sets_test_long %>%
+                             group_by(PX_ID,grp) %>%
+                             filter(first(uscrs2)==50) %>%
+                             ungroup,
+                           10,"prob_outcome_6wk_modC")
+ggplot(calibdat50,aes(x=exp,y=obs)) +
+  geom_abline(intercept=0,slope=1,color="darkgrey") +
+  geom_errorbar(aes(ymin=lower,ymax=upper)) +
+  geom_point(size=2,alpha=.8) + 
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1),
+                     oob = scales::rescale_none) +
+  # # coord_cartesian(xlim=c(0,.15),ylim=c(0,.15)) +
+  # facet_zoom(xlim=c(0,.03),ylim=c(0,.03),zoom.size=1,show.area=F) +  
+  theme_bw() +
+  theme(text=element_text(size=14)) +
+  labs(y="Observed 6-week mortality probability",x="Predicted 6-week mortality probability (US-CRS 2.0)",title="Calibration curve by decile of predicted risk for test-set patients with score 50")
+
+```
+
 
 ## Calibration by status and exception
 ```{r excepplot}
@@ -470,6 +550,8 @@ ggplot(calib_status_excep_long,
   labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
 ggsave("calib-by-excep-test.png",width=9.5,height=6.5)
+
+calib_status_excep_long
 ```
 
 ## Calibration by diagnosis
@@ -522,4 +604,62 @@ ggplot(calib_diag_long,
   labs(x = "Diagnosis", y = "6-Week Mortality Probability", fill = NULL) +
   theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
 ggsave("calib-by-diag-test.png",width=11,height=6.5)
+```
+
+```{r excepplot (nonoverlap)}
+# MOLLY ADDED - recreate figure 2 after removing overlapped candidates (only retain test candidates who don't appear in training)
+base::load("mortality_model_train_data.Rdata")
+train_px_ids = combined_df %>%
+  pull(PX_ID) %>%
+  unique()
+
+eight_sets_test_non_overlap = eight_sets_test_long %>%
+  filter(!(PX_ID %in% train_px_ids))
+
+# get overall observed and expected by status and exception
+levels = eight_sets_test_non_overlap %>% count(status_at_start,excep_at_start)
+calib_status_excepC = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(eight_sets_test_non_overlap %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modC") %>%
+      mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status_excepC = do.call(rbind.data.frame,calib_status_excepC)
+calib_status_excepF = lapply(1:nrow(levels),
+                      function(xx) {
+  i = levels$status_at_start[xx]
+  j = levels$excep_at_start[xx]
+  makeCalibData(eight_sets_test_non_overlap %>% filter(status_at_start==i,excep_at_start==j),q=1,"prob_outcome_6wk_modF") %>%
+      mutate(status=i,exception=j) %>% relocate(status,exception,.before=exp) %>% select(-risk_grp)
+})
+calib_status_excepF = do.call(rbind.data.frame,calib_status_excepF)
+
+# make bar plot by status
+calib_status_excep = inner_join(calib_status_excepC %>% rename(expC.value=exp,expC.lower=exp.25,expC.upper=exp.75),
+                          calib_status_excepF %>% rename(expF.value=exp,expF.lower=exp.25,expF.upper=exp.75)) %>%
+  rename(obs.value=obs,obs.lower=lower,obs.upper=upper)
+calib_status_excep
+calib_status_excep_long = calib_status_excep %>%
+  pivot_longer(cols = matches("expC|expF|obs"), names_to = c("type",".value"),
+               names_sep = "\\.") %>%
+  mutate(type_fact = factor(type,levels=c("expC","expF","obs"),
+                            labels=c("Predicted\nUS-CRS 2.0 -\nSimple",
+                                     "Predicted\nUS-CRS 2.0 -\nComplex",
+                                     "Observed")))
+ggplot(calib_status_excep_long,
+       aes(x = factor(paste(status,exception,sep=".")), y = value, fill = type_fact)) +
+  geom_col(position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    position = position_dodge(width = 0.9),
+    width = 0.2
+  ) +
+  coord_cartesian(ylim=c(0,.5)) +
+  # scale_fill_manual(values = c("Predicted\n(US-CRS 2.0)" = "white", "Observed" = "gray40")) +
+  scale_fill_viridis_d() +
+  labs(x = "Status.Exception (0=standard, 1=exception)", y = "6-Week Mortality Probability", fill = NULL) +
+  theme_bw() + theme(text=element_text(size=14),legend.key.spacing.y = unit(.5, "lines"))
+ggsave("calib-by-excep-non-overlap.png",width=9.5,height=6.5)
+
 ```
