@@ -374,6 +374,12 @@ static_table = left_join(static_table %>% select(-diagnosis,-durable_LVAD),df_fi
 with(static_table,table(impella,useNA="ifany"))
 with(static_table,table(iabp,useNA="ifany"))
 
+# look at % Impella 5.5
+## note: no 239 in training data
+ids = static_table %>% filter(train_test_split_label=="Training",impella==1) %>% pull(JustId)
+justdat %>% filter(JustId %in% ids) %>% count(BrandId,grepl(5.5,OtherSpecify)) %>% mutate(prop=n/sum(n))
+justdat %>% filter(JustId %in% ids,grepl(5.5,OtherSpecify)) %>% count(OtherSpecify) 
+
 # rename diagnosis groups
 ## Amyloid, dilated, hypertrophic, and restricted are types of cardiomyopathies
 static_table = static_table %>%
